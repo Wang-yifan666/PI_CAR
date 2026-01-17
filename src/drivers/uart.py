@@ -2,17 +2,19 @@ import threading
 import time
 import src.global_ctx as ctx
 
+from src.utils.logger import sys_logger as logger
+
 class UART_drv ( threading.Thread ):
     def __init__( self ):
         super().__init__()
-        print( "UART_drv: 初始化完成" )
+        logger.info( "UART_drv: 初始化完成" )
 
     def run( self ):
-        print( "UART_drv: 线程启动" )
+        logger.info( "UART_drv: 线程启动" )
         while not ctx.system_stop_event.is_set() :
             #data = "data_from_uart"
-            #print( f"UART_drv: Received {data}" )
+            #logger.info( f"UART_drv: Received {data}" )
             #ctx.uart_queue.put( data )
             time.sleep( 1 )
             
-        print( "UART_drv: 线程结束" )
+        logger.info( "UART_drv: 线程结束" )

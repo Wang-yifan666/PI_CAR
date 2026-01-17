@@ -14,7 +14,10 @@ from src.core.fsm import FSM_core
 from src.services.dector import DECTOR_ser
 from src.drivers.uart import UART_drv
 
-print("hello uesr")
+# 导入日志
+from src.utils.logger import sys_logger as logger
+
+logger.info("hello user")
 
 def load_config() :
     try :
@@ -22,14 +25,14 @@ def load_config() :
         yaml_path = os.path.join(base_dir , '../config/settings.yaml')
         with open ( yaml_path , 'r' , encoding='utf-8') as f :
             ctx.config = yaml.safe_load(f)
-            print("配置文件加载成功")
+            logger.info("配置文件加载成功")
             return True
     except Exception as e :
-        print("配置文件加载失败,错误信息：", {e} )
+        logger.error(f"配置文件加载失败,错误信息：{e}")
         return False
     
 def main() :
-    print("+++ 系统开始启动 +++")
+    logger.info("+++ 系统开始启动 +++")
     
     if not load_config() : 
         return
@@ -40,41 +43,41 @@ def main() :
     fsm_thread = FSM_core()
     
     # 启动线程
-    print("-" * 30)
+    logger.info("-" * 30)
     uart_thread.start()
     dector_thread.start()   
     fsm_thread.start()
-    print("-" * 30)
-    print("+++ 系统启动完成 +++")
+    logger.info("-" * 30)
+    logger.info("+++ 系统启动完成 +++")
     
-    print("系统正在运行中,按 Ctrl+C 停止系统")
+    logger.info("系统正在运行中,按 Ctrl+C 停止系统")
     
     try :
         while True :
             if not ( uart_thread.is_alive() ) :
-                print("UART线程异常退出,系统停止运行")
+                logger.info("UART线程异常退出,系统停止运行")
                 break
             if not ( dector_thread.is_alive() ) :
-                print("DECTOR线程异常退出,系统停止运行")
+                logger.info("DECTOR线程异常退出,系统停止运行")
                 break   
             if not ( fsm_thread.is_alive() ) :
-                print("FSM线程异常退出,系统停止运行")
+                logger.info("FSM线程异常退出,系统停止运行")
                 break
             
-            print("系统运行正常...")
+            logger.info("系统运行正常...")
             
             time.sleep(1)
             
     except KeyboardInterrupt :
-        print("+" * 30)
-        print("收到停止信息,系统即将停止运行")
+        logger.info("+" * 30)
+        logger.info("收到停止信息,系统即将停止运行")
         ctx.system_stop_event.set()
         
         uart_thread.join(timeout = 2)
         dector_thread.join(timeout = 2)
         fsm_thread.join(timeout = 2)
         
-        print("+++ 系统已停止运行 +++")
+        logger.info("+++ 系统已停止运行 +++")
         
 if __name__ == "__main__" :
     main()
