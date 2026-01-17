@@ -1,0 +1,6 @@
+PyYAML
+pyserial
+onnxruntime
+numpy
+opencv-python-headless
+requests
