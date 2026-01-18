@@ -25,14 +25,14 @@ def load_config() :
         yaml_path = os.path.join(base_dir , '../config/settings.yaml')
         with open ( yaml_path , 'r' , encoding='utf-8') as f :
             ctx.config = yaml.safe_load(f)
-            logger.info("配置文件加载成功")
+            logger.info("[ INIT ]配置文件加载成功")
             return True
     except Exception as e :
-        logger.error(f"配置文件加载失败,错误信息：{e}")
+        logger.error(f"[ INIT ]配置文件加载失败,错误信息：{e}")
         return False
     
 def main() :
-    logger.info("+++ 系统开始启动 +++")
+    logger.info("[ INIT ]系统开始启动")
     
     if not load_config() : 
         return
@@ -48,36 +48,36 @@ def main() :
     dector_thread.start()   
     fsm_thread.start()
     logger.info("-" * 30)
-    logger.info("+++ 系统启动完成 +++")
+    logger.info("[ INIT ]系统启动完成")
     
-    logger.info("系统正在运行中,按 Ctrl+C 停止系统")
+    logger.info("[ INIT ]系统正在运行中,按 Ctrl+C 停止系统")
     
     try :
         while True :
             if not ( uart_thread.is_alive() ) :
-                logger.info("UART线程异常退出,系统停止运行")
+                logger.info("[ INIT ]UART线程异常退出,系统停止运行")
                 break
             if not ( dector_thread.is_alive() ) :
-                logger.info("DECTOR线程异常退出,系统停止运行")
+                logger.info("[ INIT ]DECTOR线程异常退出,系统停止运行")
                 break   
             if not ( fsm_thread.is_alive() ) :
-                logger.info("FSM线程异常退出,系统停止运行")
+                logger.info("[ INIT ]FSM线程异常退出,系统停止运行")
                 break
             
-            logger.info("系统运行正常...")
+            logger.info("[ INIT ]系统运行正常...")
             
             time.sleep(1)
             
     except KeyboardInterrupt :
         logger.info("+" * 30)
-        logger.info("收到停止信息,系统即将停止运行")
+        logger.info("[ INIT ]收到停止信息,系统即将停止运行")
         ctx.system_stop_event.set()
         
         uart_thread.join(timeout = 2)
         dector_thread.join(timeout = 2)
         fsm_thread.join(timeout = 2)
         
-        logger.info("+++ 系统已停止运行 +++")
+        logger.info("[ INIT ]系统已停止运行")
         
 if __name__ == "__main__" :
     main()

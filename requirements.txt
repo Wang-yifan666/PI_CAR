@@ -4,3 +4,5 @@ onnxruntime
 numpy
 opencv-python-headless
 requests
+mss
+

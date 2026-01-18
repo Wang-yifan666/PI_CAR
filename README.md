@@ -62,8 +62,5 @@ pip install -r requirements.txt
 ---
 
 
-
-## 贡献者
-
 **License**: MIT
 

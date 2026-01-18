@@ -1,0 +1,13 @@
+# 全局的配置文件
+
+# 串口相关
+uart :
+  baudrate : 115200
+
+# 视觉相关
+dector :
+  model_path : "models/best.onnx"  # 模型文件
+  class_file: "models/classes.txt" # 类别文件
+
+  conf_threshold: 0.60 # 置信度阈值
+  
