@@ -25,14 +25,14 @@ def load_config() :
         yaml_path = os.path.join(base_dir , '../config/settings.yaml')
         with open ( yaml_path , 'r' , encoding='utf-8') as f :
             ctx.config = yaml.safe_load(f)
-            logger.info("[ INIT ]配置文件加载成功")
+            logger.info("[ INIT ] Configuration file loaded successfully")
             return True
     except Exception as e :
-        logger.error(f"[ INIT ]配置文件加载失败,错误信息：{e}")
+        logger.error(f"[ INIT ] Configuration file loading failed, error message: {e}")
         return False
     
 def main() :
-    logger.info("[ INIT ]系统开始启动")
+    logger.info("[ INIT ] System started up")
     
     if not load_config() : 
         return
@@ -48,36 +48,36 @@ def main() :
     dector_thread.start()   
     fsm_thread.start()
     logger.info("-" * 30)
-    logger.info("[ INIT ]系统启动完成")
+    logger.info("[ INIT ] System startup completed")
     
-    logger.info("[ INIT ]系统正在运行中,按 Ctrl+C 停止系统")
+    logger.info("[ INIT ] The system is currently running. Press Ctrl+C to stop the system")
     
     try :
         while True :
             if not ( uart_thread.is_alive() ) :
-                logger.info("[ INIT ]UART线程异常退出,系统停止运行")
+                logger.info("[ INIT ] UART thread exited abnormally, system stop running")
                 break
             if not ( dector_thread.is_alive() ) :
-                logger.info("[ INIT ]DECTOR线程异常退出,系统停止运行")
+                logger.info("[ INIT ] DECTOR thread exited abnormally, system stop running")
                 break   
             if not ( fsm_thread.is_alive() ) :
-                logger.info("[ INIT ]FSM线程异常退出,系统停止运行")
+                logger.info("[ INIT ] FSM thread exited abnormally, system stop running")
                 break
             
-            logger.info("[ INIT ]系统运行正常...")
+            logger.info("[ INIT ] Runing ")
             
             time.sleep(1)
             
     except KeyboardInterrupt :
         logger.info("+" * 30)
-        logger.info("[ INIT ]收到停止信息,系统即将停止运行")
+        logger.info("[ INIT ] The system will stop running upon receiving the stop message")
         ctx.system_stop_event.set()
         
         uart_thread.join(timeout = 2)
         dector_thread.join(timeout = 2)
         fsm_thread.join(timeout = 2)
         
-        logger.info("[ INIT ]系统已停止运行")
+        logger.info("[ INIT ] Stop runing")
         
 if __name__ == "__main__" :
     main()
