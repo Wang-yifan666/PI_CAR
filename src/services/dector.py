@@ -43,12 +43,12 @@ class DECTOR_ser( threading.Thread ):
         
         # 日志报告当前模式
         if not AI_READY:
-            logger.warning(f"[ DECTOR ]: 核心库缺失 ({MISSING_LIB})，进入模拟模式")
+            logger.warning(f"[ DECTOR ]: Core library missing ({MISSING_LIB}),Enter simulation mode")
         else:
             if SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ]: 未检测到树莓派摄像头，切换为电脑录屏")
+                logger.info("[ DECTOR ]: No Raspberry Pi camera detected, switching to computer screen recording")
             elif SOURCE_TYPE == "PI_CAM":
-                logger.info("[ DECTOR ]: 检测到树莓派摄像头，切换PI】")
+                logger.info("[ DECTOR ]: Raspberry Pi camera detected, switching to PI")
 
     # 读取类别列表
     def _load_classes(self):
@@ -60,10 +60,10 @@ class DECTOR_ser( threading.Thread ):
 
             with open ( abs_path , 'r' , encoding = 'utf-8') as f :
                 self.classes = [line.strip() for line in f.readlines()]
-            logger.info(f"[ DECTOR ] 类别文件加载成功 ,加载了{len(self.classes)} 个类别标签")
+            logger.info(f"[ DECTOR ] Category file loaded successfully ,load{len(self.classes)} category labels")
         
         except Exception as e :
-            logger.error(f"[ DECTOR ] 类别文件加载失败 {e} ")
+            logger.error(f"[ DECTOR ] Category file loading failed {e} ")
     
     # 初始化硬件
     def _init_hardware(self):
@@ -73,7 +73,7 @@ class DECTOR_ser( threading.Thread ):
         try:
             # 树莓派模式
             if SOURCE_TYPE == "PI_CAM":
-                logger.info("[ DECTOR ]正在启动 Picamera2...")
+                logger.info("[ DECTOR ] Starting Picamera2...")
                 self.picam2 = Picamera2()
                 config = self.picam2.create_configuration(main={"size": (640, 640), "format": "RGB888"})
                 self.picam2.configure(config)
@@ -81,7 +81,7 @@ class DECTOR_ser( threading.Thread ):
 
             # 电脑屏幕模式
             elif SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ]正在启动屏幕捕获 (mss)...")
+                logger.info("[ DECTOR ] Screen capture is being initiated (mss)...")
                 self.sct = mss.mss()
 
             # 加载yolov5 (共用)
@@ -89,12 +89,12 @@ class DECTOR_ser( threading.Thread ):
             base_dir = os.path.dirname(os.path.abspath(__file__))
             model_abs_path = os.path.join(base_dir, '../../', model_path)
             
-            logger.info(f"[ DECTOR ]正在加载模型: {model_path}")
+            logger.info(f"[ DECTOR ] Loading model: {model_path}")
             self.sess = onnxruntime.InferenceSession(model_abs_path)
             self.input_name = self.sess.get_inputs()[0].name
             
         except Exception as e:
-            logger.error(f"[ DECTOR ]启动失败: {e}")
+            logger.error(f"[ DECTOR ] Startup failure: {e}")
             self.mode = True # 降级为模拟
     
     # 预处理图片,给yolov5
@@ -125,7 +125,7 @@ class DECTOR_ser( threading.Thread ):
                 
                 # 获取名字
                 name = self.classes[class_id] if self.classes else str(class_id)
-                logger.info(f"[ DECTOR ] 发现目标: {name} (置信度: {score:.2f})")
+                logger.info(f"[ DECTOR ] Target spotted: {name} (confidence: {score:.2f})")
                 
                 # 打包证据
                 evidence = {
@@ -144,7 +144,7 @@ class DECTOR_ser( threading.Thread ):
         
     # 运行
     def run(self):
-        logger.info("[ DECTOR ]: 线程启动")
+        logger.info("[ DECTOR ]: Thread starting")
         self._load_classes()
         self._init_hardware()
         
@@ -153,7 +153,7 @@ class DECTOR_ser( threading.Thread ):
             if self.mode:
                 time.sleep(1)
                 if int(time.time()) % 10 == 0:
-                    logger.info("[ fake ]发现摩托车...")
+                    logger.info("[ fake ] ebike founded")
                     fake_ev = {"class_name": "motorcycle", "conf": 0.99, "frame": None}
                     if not ctx.dector_queue.full(): ctx.dector_queue.put(fake_ev)
                     time.sleep(1)
@@ -196,11 +196,11 @@ class DECTOR_ser( threading.Thread ):
                 time.sleep(0.05) # 约 20 FPS
 
             except Exception as e:
-                logger.error(f"[ DECTOR ][ OTHER ]推理循环出错: {e}")
+                logger.error(f"[ DECTOR ][ OTHER ] Reasoning error: {e}")
                 time.sleep(1)
 
         # 退出清理
         if self.picam2: self.picam2.stop()
         if self.sct: self.sct.close()
         cv2.destroyAllWindows()
-        logger.info("[ DECTOR ]线程结束")
+        logger.info("[ DECTOR ] Thread finished")
