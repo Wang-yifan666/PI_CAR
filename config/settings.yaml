@@ -10,4 +10,5 @@ dector :
   class_file: "models/classes.txt" # 类别文件
 
   conf_threshold: 0.60 # 置信度阈值
+  target_classes: [0 , 1 , 2]
   
