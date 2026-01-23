@@ -41,14 +41,19 @@ class DECTOR_ser( threading.Thread ):
         
         self.mode = not AI_READY
         
+        self.latest_frame = None            # 只保留最新的图片，防止出现大幅度不同步
+        self.result_frame = None            # 存放结果
+        self.frame_lock = threading.Lock()  # 线程锁，防止又读又写
+        self.stop_capture = False
+        
         # 日志报告当前模式
         if not AI_READY:
             logger.warning(f"[ DECTOR ]: Core library missing ({MISSING_LIB}),Enter simulation mode")
         else:
             if SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ]: No Raspberry Pi camera detected, switching to computer screen recording")
+                logger.info("[ DECTOR ]: No Raspberry Pi camera, switching to computer screen recording")
             elif SOURCE_TYPE == "PI_CAM":
-                logger.info("[ DECTOR ]: Raspberry Pi camera detected, switching to PI")
+                logger.info("[ DECTOR ]: Raspberry Pi camera equiped, switching to PI")
 
     # 读取类别列表
     def _load_classes(self):
@@ -81,21 +86,86 @@ class DECTOR_ser( threading.Thread ):
 
             # 电脑屏幕模式
             elif SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ] Screen capture is being initiated (mss)...")
-                self.sct = mss.mss()
+                logger.info("[ DECTOR ] Screen capture will start in worker thread.")
 
             # 加载yolov5 (共用)
             model_path = ctx.config['dector']['model_path']
             base_dir = os.path.dirname(os.path.abspath(__file__))
             model_abs_path = os.path.join(base_dir, '../../', model_path)
             
-            logger.info(f"[ DECTOR ] Loading model: {model_path}")
-            self.sess = onnxruntime.InferenceSession(model_abs_path)
+            sess_options = onnxruntime.SessionOptions() 
+            sess_options.intra_op_num_threads = 4      # 将四核全部使用，加快推理速度
+            self.sess = onnxruntime.InferenceSession(model_abs_path, sess_options)
             self.input_name = self.sess.get_inputs()[0].name
             
         except Exception as e:
             logger.error(f"[ DECTOR ] Startup failure: {e}")
             self.mode = True # 降级为模拟
+    
+    # 处理大量图像，采集最新的一张图像
+    def _capture_worker(self):
+        logger.info("[ DECTOR ] capture worker starting ... ")
+        
+        # 在这里初始化 mss
+        local_sct = None
+        if SOURCE_TYPE == "PC_SCREEN":
+            import mss
+            local_sct = mss.mss()
+            
+        cv2.namedWindow("Live", cv2.WINDOW_NORMAL)
+
+        while not self.stop_capture:
+            try :
+                frame = None
+                
+                # 树莓派
+                if SOURCE_TYPE == "PI_CAM" and self.picam2 :
+                    frame = self.picam2.capture_array()     # 阻塞，等待下一帧
+                    
+                # 电脑模式    
+                elif SOURCE_TYPE == "PC_SCREEN" and local_sct :
+                    monitor = local_sct.monitors[1]
+                    sct_img = local_sct.grab(monitor)
+                    img_np = np.array(sct_img)
+                    frame = cv2.cvtColor(img_np , cv2.COLOR_BGR2RGB)
+                    frame = cv2.resize(frame , (640 , 640))
+                    
+                # 模拟
+                elif SOURCE_TYPE  == "MOCK" or self.mock_mode :
+                    time.sleep(0.1) 
+                    frame = np.zeros((640,640,3) , dtype = np.uint8) 
+                
+                # 将新的图片写入为下一张处理的图片，减少不同步
+                if frame is not None :
+                    # 正确的锁语法
+                    with self.frame_lock :
+                        self.latest_frame = frame 
+                        if self.result_frame is not None :
+                            res_img = self.result_frame 
+                        else :
+                            np.zeros_like(frame)
+                        
+                    # 降低不同步    
+                    if SOURCE_TYPE == "PC_SCREEN":
+                        # 实时的原图
+                        left_img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        
+                        # 结果图
+                        right_img = res_img
+                        
+                        # 拼接
+                        combined_img = np.hstack([left_img, right_img])
+                        
+                        # 显示
+                        cv2.imshow("Live", combined_img)
+                        cv2.waitKey(1)
+                
+                if SOURCE_TYPE != "PI_CAM" :    # 在非必要时减少cpu占比
+                    time.sleep(0.05) 
+                        
+            except Exception as e :
+                logger.error(f"[ DECTOR ] : Capture error : {e}")
+                time.sleep(1)
     
     # 预处理图片,给yolov5
     def _preprocess(self , img):
@@ -107,40 +177,69 @@ class DECTOR_ser( threading.Thread ):
         return img.astype(np.float32)
     
     # 后处理,yolov5结果处理
-    def _postprocess(self , outputs , img):
-        output = outputs[0][0] 
-        
+    def _yolo_postprocess(self, outputs, original_img):
+        output = outputs[0][0]
         conf_threshold = ctx.config['dector']['conf_threshold']
+        target_classes = ctx.config['dector']['target_classes']
         
-        for row in output :
-            obj_conf = row[4]  # 物体的置信度
-            if obj_conf < conf_threshold :
-                continue
+        # 收集所有合格的候选框
+        boxes = []          # 存坐标
+        confidences = []    # 存分数
+        class_ids = []      # 存类别ID
+        
+        for row in output:
+            obj_conf = row[4]
+            if obj_conf < conf_threshold: continue
             
             class_scores = row[5:]
             class_id = np.argmax(class_scores)
             score = obj_conf * class_scores[class_id]
+            
+            if score > conf_threshold and class_id in target_classes:
+                # 还原坐标
+                cx, cy, w, h = row[0:4]
+                # 转为左上角坐标 (x, y, w, h)
+                x = int(cx - w/2)
+                y = int(cy - h/2)
+                
+                boxes.append([x, y, int(w), int(h)])
+                confidences.append(float(score))
+                class_ids.append(int(class_id))
         
-            if score > conf_threshold :
+        # NMS
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, 0.75)
+        
+        # 只处理幸存下来的框
+        draw_img = original_img.copy()
+        
+        if len(indices) > 0:
+            for i in indices.flatten():
+                box = boxes[i]
+                x, y, w, h = box[0], box[1], box[2], box[3]
+                score = confidences[i]
+                class_id = class_ids[i]
                 
-                # 获取名字
+                # 画框
+                cv2.rectangle(draw_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
                 name = self.classes[class_id] if self.classes else str(class_id)
-                logger.info(f"[ DECTOR ] Target spotted: {name} (confidence: {score:.2f})")
+                label = f"{name} {score:.2f}"
+                cv2.putText(draw_img, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
-                # 打包证据
+                logger.info(f"[ DECTOR ] Object Found: {name} (Conf: {score:.2f})")
+                
                 evidence = {
-                    "type": "dectorion",
+                    "type": "detection",
                     "class_name": name,
                     "conf": float(score),
-                    "frame": img # 把原图带上
+                    "frame": original_img
                 }
                 
-                # 放入队列,通知 FSM
                 if not ctx.dector_queue.full():
                     ctx.dector_queue.put(evidence)
-                    
-                # 为了防止日志刷屏,稍微停一下
-                time.sleep(0.5) 
+
+        # 保存画好的图供显示
+        with self.frame_lock:
+            self.result_frame = draw_img
         
     # 运行
     def run(self):
@@ -148,59 +247,63 @@ class DECTOR_ser( threading.Thread ):
         self._load_classes()
         self._init_hardware()
         
+        # 开始采集线程
+        capture_thread = threading.Thread(target = self._capture_worker , daemon = True )
+        capture_thread.start()
+        
         while not ctx.system_stop_event.is_set():
+            
+            current_img = None 
+            with self.frame_lock :
+                if self.latest_frame is not None :
+                    current_img = self.latest_frame.copy()   # 进行复制
+                    
+            if current_img is None :
+                time.sleep(0.1)
+                continue             
+            
             # 模拟模式
             if self.mode:
                 time.sleep(1)
                 if int(time.time()) % 10 == 0:
                     logger.info("[ fake ] ebike founded")
                     fake_ev = {"class_name": "motorcycle", "conf": 0.99, "frame": None}
+                    # [修复] 统一队列名
                     if not ctx.dector_queue.full(): ctx.dector_queue.put(fake_ev)
                     time.sleep(1)
                 continue
 
-            #真实推理模式
-            try:
-                img_rgb = None
-                
-                # 获取图像
-                if SOURCE_TYPE == "PI_CAM":
-                    # 树莓派直接吐出 RGB
-                    img_rgb = self.picam2.capture_array()
-                
-                elif SOURCE_TYPE == "PC_SCREEN":
-                    # 截取全屏并强制缩放到 640x640
-                    monitor = self.sct.monitors[1] # 获取主屏幕
-                    sct_img = self.sct.grab(monitor)
-                    # mss 抓到的是 BGRA，转成 RGB
-                    img_np = np.array(sct_img)
-                    img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGRA2RGB)
-                    # 强制缩放
-                    img_rgb = cv2.resize(img_rgb, (640, 640))
-
-                # 推理流程 (共用)
-                if img_rgb is not None:
+            else:
+                # 真实推理
+                try:
                     # 预处理
-                    input_tensor = self._preprocess(img_rgb)
+                    # [修复] 调用函数名改为 _preprocess
+                    input_tensor = self._preprocess(current_img)
+                    
                     # 推理
                     outputs = self.sess.run(None, {self.input_name: input_tensor})
-                    # 后处理 (转回 BGR 方便 OpenCV 存图)
-                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                    self._postprocess(outputs, img_bgr)
-                
-                # 如果是电脑模式，在屏幕上显示一个小窗口，让你看到它在看哪里
-                if SOURCE_TYPE == "PC_SCREEN":
-                    cv2.imshow("RoboPatrol View", img_bgr)
-                    cv2.waitKey(1)
+                    
+                    # 后处理
+                    img_bgr = cv2.cvtColor(current_img, cv2.COLOR_RGB2BGR)
+                    self._yolo_postprocess(outputs, img_bgr)
+                    
+                    # # 如果是电脑模式，显示实时画面
+                    # if SOURCE_TYPE == "PC_SCREEN" and current_img is not None:
+                    #     show_img = cv2.cvtColor(current_img, cv2.COLOR_RGB2BGR)
+                    #     cv2.imshow("RoboPatrol Live", show_img)
+                    #     cv2.waitKey(1)
 
-                time.sleep(0.05) # 约 20 FPS
-
-            except Exception as e:
-                logger.error(f"[ DECTOR ][ OTHER ] Reasoning error: {e}")
-                time.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"[ DECTOR ]: Inference Error: {e}")
+                    time.sleep(1)
 
         # 退出清理
+        self.stop_capture = True
         if self.picam2: self.picam2.stop()
-        if self.sct: self.sct.close()
-        cv2.destroyAllWindows()
+        # sct 在子线程里会自动销毁
+        try:
+            cv2.destroyAllWindows()
+        except:
+            pass
         logger.info("[ DECTOR ] Thread finished")
