@@ -5,9 +5,6 @@ from typing import Optional, List, Tuple, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
 
-#导入日志
-from src.utils.logger import sys_logger as logger
-
 
 class STM32CommandType(Enum):
     """命令类型枚举"""
@@ -121,15 +118,15 @@ class STM32Communicator:
             )
             
             if self.ser.is_open:
-                logger.info(f"[ UART ] Successfully connected to the serial port")
+                print(f"成功连接到串口 {self.port}")
                 self._start_receive_thread()
                 return True
             else:
-                logger.error(f"[ UART ] unable to open the serial port")
+                print(f"无法打开串口 {self.port}")
                 return False
                 
         except serial.SerialException as e:
-            logger.error(f"[ UART ] unable to connect the serial port")
+            print(f"串口连接错误: {e}")
             return False
     
     def disconnect(self):
@@ -140,7 +137,7 @@ class STM32Communicator:
         
         if self.ser and self.ser.is_open:
             self.ser.close()
-            logger.error(f"[ UART ] serial port of connecting closed")
+            print("串口连接已关闭")
     
     def set_response_callback(self, callback: Callable[[STM32Response], None]):
         """设置命令响应回调函数"""
@@ -177,10 +174,10 @@ class STM32Communicator:
                             self._process_received_line(line)
                             
             except serial.SerialException as e:
-                logger.error(f"[ UART ] category file date_reading failed {e}")
+                print(f"串口读取错误: {e}")
                 time.sleep(0.1)
             except Exception as e:
-                logger.error(f"[ UART ] category file receive_resolve failed {e}")
+                print(f"接收处理错误: {e}")
                 time.sleep(0.1)
             
             time.sleep(0.01)  # 短暂休眠避免CPU占用过高
@@ -197,7 +194,7 @@ class STM32Communicator:
         
         # 检查是否是启动提示
         if line.startswith("BOOT,OK"):
-            logger.info(f"[ UART ] STM32 have opend")
+            print("STM32启动完成")
             if self.response_callback:
                 self.response_callback(STM32Response(True, 0, [line], line))
             return
@@ -234,12 +231,12 @@ class STM32Communicator:
                     
                     if self.gps_callback:
                         self.gps_callback(lat, lon)
-                    else:    
-                        logger.info(f"[ UART ] GPS is {lat:.7f},{lon:.7f}")
+                    else:
+                        print(f"GPS数据: 纬度={lat:.7f}, 经度={lon:.7f}")
                 else:
-                    logger.error(f"[ UART ] Without GPS position")
+                    print("GPS: 无定位")
         except Exception as e:
-            logger.error(f"[ UART ] GPS parsing error")
+            print(f"GPS数据解析错误: {e}")
     
     def send_command(self, command: str, wait_for_response: bool = True, 
                     timeout: float = 2.0) -> Optional[STM32Response]:
@@ -255,7 +252,7 @@ class STM32Communicator:
             STM32Response对象或None
         """
         if not self.ser or not self.ser.is_open:
-            logger.error(f"[ UART ] serial port not connected")
+            print("错误：串口未连接")
             return None
         
         with self.command_lock:
@@ -265,7 +262,7 @@ class STM32Communicator:
             
             # 检查命令长度
             if len(command) > 64:
-                logger.error(f"[ UART ] warning: len{len(command)} exceeded the limit 64")
+                print(f"警告：命令长度 {len(command)} 超过限制 64")
                 return None
             
             try:
@@ -280,7 +277,7 @@ class STM32Communicator:
                 return self._wait_for_response(timeout)
                 
             except serial.SerialException as e:
-                logger.error(f"[ UART ] error in sending command")
+                print(f"发送命令错误: {e}")
                 return None
     
     def _wait_for_response(self, timeout: float) -> Optional[STM32Response]:
@@ -320,11 +317,11 @@ class STM32Communicator:
                             except ValueError:
                                 pass
                 except Exception as e:
-                    logger.error(f"[ UART ] reading error")
+                    print(f"读取响应错误: {e}")
             
             time.sleep(0.01)
         
-        logger.error(f"[ UART ] waiting overtime {timeout}秒")
+        print(f"等待响应超时 ({timeout}秒)")
         return None
     
     # ========== 具体命令方法 ==========
@@ -341,7 +338,7 @@ class STM32Communicator:
             seconds: 秒数 (0-9999)
         """
         if not 0 <= seconds <= 9999:
-            logger.error(f"[ UART ] fault : FORWARD time exceed range(0-9999)")
+            print(f"错误：前进时间 {seconds} 超出范围 0-9999")
             return None
         
         cmd = f"F{seconds:04d}"
@@ -355,7 +352,7 @@ class STM32Communicator:
             seconds: 秒数 (0-9999)
         """
         if not 0 <= seconds <= 9999:
-            logger.error(f"[ UART ] fault : BACKWARD time exceed range(0-9999)")
+            print(f"错误：后退时间 {seconds} 超出范围 0-9999")
             return None
         
         cmd = f"B{seconds:04d}"
@@ -369,7 +366,7 @@ class STM32Communicator:
             seconds: 秒数 (0-999)
         """
         if not 0 <= seconds <= 999:
-            logger.error(f"[ UART ] fault : LEFT_SHIFT time exceed range(0-9999)")
+            print(f"错误：左平移时间 {seconds} 超出范围 0-999")
             return None
         
         cmd = f"HL{seconds:03d}"
@@ -383,7 +380,7 @@ class STM32Communicator:
             seconds: 秒数 (0-999)
         """
         if not 0 <= seconds <= 999:
-            logger.error(f"[ UART ] fault : RIGHT_SHIFT time exceed range(0-999)")
+            print(f"错误：右平移时间 {seconds} 超出范围 0-999")
             return None
         
         cmd = f"HR{seconds:03d}"
@@ -397,7 +394,7 @@ class STM32Communicator:
             degrees: 角度 (0-999)
         """
         if not 0 <= degrees <= 999:
-            logger.error(f"[ UART ] fault : LEFT_ROTATE time exceed range(0-999)")
+            print(f"错误：旋转角度 {degrees} 超出范围 0-999")
             return None
         
         cmd = f"L0{degrees:03d}"
@@ -411,7 +408,7 @@ class STM32Communicator:
             degrees: 角度 (0-999)
         """
         if not 0 <= degrees <= 999:
-            logger.error(f"[ UART ] fault : RIGHT_ROTATE time exceed range(0-999)")
+            print(f"错误：旋转角度 {degrees} 超出范围 0-999")
             return None
         
         cmd = f"R0{degrees:03d}"
@@ -427,7 +424,7 @@ class STM32Communicator:
         response = self.send_command("STATUS")
         
         if not response or not response.success:
-            logger.error(f"[ UART ] Faild to obtian the status")
+            print("获取状态失败")
             return None
         
         return self._parse_status_response(response.data_lines)
@@ -512,10 +509,10 @@ class STM32Communicator:
         """
         if direction not in ['0', '1']:
             print("错误：舵机方向必须是 '0'(左) 或 '1'(右)")
-            logger.error(f"[ UART ] Error: The direction of the servo must be '0' (left) or '1' (right).") 
+            return None
         
         if not 0 <= angle <= 99:
-            logger.error(f"[ UART ] fault: The relative angle of the steering gear exceeds the limit range.")
+            print(f"错误：舵机相对角度 {angle} 超出范围 0-99")
             return None
         
         cmd = f"D{direction}0{angle:02d}"
@@ -544,127 +541,127 @@ class STM32Communicator:
 
 # ========== 使用示例 ==========
 
-# def example_usage():
-#     """使用示例"""
+def example_usage():
+    """使用示例"""
     
-#     # 响应回调函数
-#     def on_response(response: STM32Response):
-#         if response.success:
-#             print("命令执行成功")
-#             if response.data_lines:
-#                 print("返回数据:")
-#                 for line in response.data_lines:
-#                     print(f"  {line}")
-#         else:
-#             print(f"命令执行失败: ERR{response.error_code:02d}")
+    # 响应回调函数
+    def on_response(response: STM32Response):
+        if response.success:
+            print("命令执行成功")
+            if response.data_lines:
+                print("返回数据:")
+                for line in response.data_lines:
+                    print(f"  {line}")
+        else:
+            print(f"命令执行失败: ERR{response.error_code:02d}")
     
-#     # GPS回调函数
-#     def on_gps(lat: float, lon: float):
-#         print(f"收到GPS: ({lat:.7f}, {lon:.7f})")
+    # GPS回调函数
+    def on_gps(lat: float, lon: float):
+        print(f"收到GPS: ({lat:.7f}, {lon:.7f})")
     
-#     # 创建通信对象
-#     # 注意：根据实际情况修改串口设备路径
-#     communicator = STM32Communicator(
-#         port='/dev/ttyUSB0',  # 或 '/dev/ttyAMA0'（树莓派原生串口）
-#         baudrate=115200,
-#         timeout=1.0
-#     )
+    # 创建通信对象
+    # 注意：根据实际情况修改串口设备路径
+    communicator = STM32Communicator(
+        port='/dev/ttyUSB0',  # 或 '/dev/ttyAMA0'（树莓派原生串口）
+        baudrate=115200,
+        timeout=1.0
+    )
     
-#     # 设置回调
-#     communicator.set_response_callback(on_response)
-#     communicator.set_gps_callback(on_gps)
+    # 设置回调
+    communicator.set_response_callback(on_response)
+    communicator.set_gps_callback(on_gps)
     
-#     # 连接
-#     if not communicator.connect():
-#         print("连接失败，退出")
-#         return
+    # 连接
+    if not communicator.connect():
+        print("连接失败，退出")
+        return
     
-#     try:
-#         # 等待启动完成（可选）
-#         time.sleep(1)
+    try:
+        # 等待启动完成（可选）
+        time.sleep(1)
         
-#         # 示例1: 查询配置
-#         print("\n=== 查询配置 ===")
-#         config = communicator.get_config()
-#         if config:
-#             print("当前配置:")
-#             for key, value in config.items():
-#                 print(f"  {key}: {value}")
+        # 示例1: 查询配置
+        print("\n=== 查询配置 ===")
+        config = communicator.get_config()
+        if config:
+            print("当前配置:")
+            for key, value in config.items():
+                print(f"  {key}: {value}")
         
-#         # 示例2: 前进5秒
-#         print("\n=== 前进5秒 ===")
-#         communicator.forward(5)
-#         time.sleep(1)  # 等待命令执行
+        # 示例2: 前进5秒
+        print("\n=== 前进5秒 ===")
+        communicator.forward(5)
+        time.sleep(1)  # 等待命令执行
         
-#         # 示例3: 查询状态
-#         print("\n=== 查询状态 ===")
-#         status = communicator.get_status()
-#         if status:
-#             print(f"机器人状态: active={status.active}, timed={status.timed}")
-#             for motor in status.motors:
-#                 print(f"  电机{motor.motor_id}: 目标转速={motor.target_rpm}, "
-#                       f"实际转速={motor.actual_rpm}, 编码器={motor.encoder_count}")
+        # 示例3: 查询状态
+        print("\n=== 查询状态 ===")
+        status = communicator.get_status()
+        if status:
+            print(f"机器人状态: active={status.active}, timed={status.timed}")
+            for motor in status.motors:
+                print(f"  电机{motor.motor_id}: 目标转速={motor.target_rpm}, "
+                      f"实际转速={motor.actual_rpm}, 编码器={motor.encoder_count}")
         
-#         # 示例4: 舵机控制
-#         print("\n=== 舵机控制 ===")
-#         # 左转15度
-#         response = communicator.servo_relative('0', 15)
-#         if response and response.error_code == 6:  # ERR06: 舵机忙
-#             print("舵机忙，等待...")
-#             if communicator.wait_servo_idle():
-#                 print("舵机空闲，重新发送命令")
-#                 communicator.servo_relative('0', 15)
+        # 示例4: 舵机控制
+        print("\n=== 舵机控制 ===")
+        # 左转15度
+        response = communicator.servo_relative('0', 15)
+        if response and response.error_code == 6:  # ERR06: 舵机忙
+            print("舵机忙，等待...")
+            if communicator.wait_servo_idle():
+                print("舵机空闲，重新发送命令")
+                communicator.servo_relative('0', 15)
         
-#         # 示例5: 停止
-#         print("\n=== 停止 ===")
-#         communicator.stop()
+        # 示例5: 停止
+        print("\n=== 停止 ===")
+        communicator.stop()
         
-#         # 保持运行，接收GPS数据
-#         print("\n=== 等待GPS数据（10秒）===")
-#         time.sleep(10)
+        # 保持运行，接收GPS数据
+        print("\n=== 等待GPS数据（10秒）===")
+        time.sleep(10)
         
-#     except KeyboardInterrupt:
-#         print("\n用户中断")
-#     finally:
-#         # 断开连接
-#         communicator.disconnect()
+    except KeyboardInterrupt:
+        print("\n用户中断")
+    finally:
+        # 断开连接
+        communicator.disconnect()
 
 
-# def interactive_mode():
-#     """交互式命令行模式"""
+def interactive_mode():
+    """交互式命令行模式"""
     
-#     communicator = STM32Communicator(
-#         port='/dev/ttyUSB0',  # 修改为你的串口设备
-#         baudrate=115200
-#     )
+    communicator = STM32Communicator(
+        port='/dev/ttyUSB0',  # 修改为你的串口设备
+        baudrate=115200
+    )
     
-#     if not communicator.connect():
-#         return
+    if not communicator.connect():
+        return
     
-#     print("STM32串口通信交互模式")
-#     print("输入命令 (输入 'quit' 退出):")
+    print("STM32串口通信交互模式")
+    print("输入命令 (输入 'quit' 退出):")
     
-#     while True:
-#         try:
-#             cmd = input(">>> ").strip()
+    while True:
+        try:
+            cmd = input(">>> ").strip()
             
-#             if cmd.lower() == 'quit':
-#                 break
+            if cmd.lower() == 'quit':
+                break
             
-#             if cmd:
-#                 response = communicator.send_command(cmd)
-#                 if response:
-#                     if response.success:
-#                         print("OK")
-#                         if response.data_lines:
-#                             for line in response.data_lines:
-#                                 print(line)
-#                     else:
-#                         print(f"ERR{response.error_code:02d}")
+            if cmd:
+                response = communicator.send_command(cmd)
+                if response:
+                    if response.success:
+                        print("OK")
+                        if response.data_lines:
+                            for line in response.data_lines:
+                                print(line)
+                    else:
+                        print(f"ERR{response.error_code:02d}")
             
-#         except KeyboardInterrupt:
-#             print("\n退出")
-#             break
+        except KeyboardInterrupt:
+            print("\n退出")
+            break
     
-#     communicator.disconnect()
+    communicator.disconnect()
 
