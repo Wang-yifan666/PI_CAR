@@ -128,7 +128,8 @@ class FSM_core( threading.Thread ):
                 return True
 
         return False
-        
+   
+   # 运行     
     def run( self ):
         logger.info( "[ FSM ] Thread starting" )
         while not ctx.system_stop_event.is_set() :

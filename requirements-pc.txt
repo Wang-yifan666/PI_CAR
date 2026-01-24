@@ -1,0 +1,7 @@
+PyYAML
+pyserial
+onnxruntime
+numpy
+opencv-python
+requests
+mss

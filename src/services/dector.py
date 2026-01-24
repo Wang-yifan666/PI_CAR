@@ -333,9 +333,10 @@ class DECTOR_ser( threading.Thread ):
             out_dir = os.path.join(data_dir, f"violations_{day_str}")
             os.makedirs(out_dir, exist_ok=True)
 
-            ts_ms = int(time.time() * 1000)
+            ts_epoch = float(violation_ev.get("ts", time.time()))
+            ts_str = time.strftime("%y%m%d_%H%M%S", time.localtime(ts_epoch))
             uid = uuid.uuid4().hex[:8]
-            prefix = f"violation_{ts_ms}_{uid}"
+            prefix = f"violation_{ts_str}_{uid}"
 
             img_path = os.path.join(out_dir, prefix + ".jpg")
             json_path = os.path.join(out_dir, prefix + ".json")
@@ -348,11 +349,41 @@ class DECTOR_ser( threading.Thread ):
                 logger.warning(f"[ DECTOR ] violation image save failed : {img_path}")
                 return None
 
-            # JSON 只保存“基本信息”
+            gps = {}
+            try:
+                if hasattr(ctx, "get_gps_copy"):
+                    gps = ctx.get_gps_copy() or {}
+                else:
+                    gps = getattr(ctx, "gps_state", {}) or {}
+            except Exception:
+                gps = {}
+
+            gps_ok = bool(gps.get("ok", False))
+            gps_lat = gps.get("lat", None)
+            gps_lon = gps.get("lon", None)
+            gps_ts = gps.get("ts", None)
+            gps_src = gps.get("source", None)
+
+            try:
+                gps_lat = float(gps_lat) if gps_lat is not None else None
+            except Exception:
+                gps_lat = None
+            try:
+                gps_lon = float(gps_lon) if gps_lon is not None else None
+            except Exception:
+                gps_lon = None
+            try:
+                gps_ts = float(gps_ts) if gps_ts is not None else None
+            except Exception:
+                gps_ts = None
+
+            # JSON文件
             meta = {
                 "type": violation_ev.get("type", "violation"),
                 "rule": violation_ev.get("rule", "unknown"),
-                "ts": violation_ev.get("ts", time.time()),
+                "ts": ts_str,
+                "ts_epoch": ts_epoch,
+                "time_local": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_epoch)),
                 "img_size": violation_ev.get("img_size", None),
 
                 "dist_norm": violation_ev.get("dist_norm", None),
@@ -360,6 +391,14 @@ class DECTOR_ser( threading.Thread ):
 
                 "ebike": violation_ev.get("ebike", {}),
                 "strip": violation_ev.get("strip", {}),
+
+                "gps": {
+                    "ok": gps_ok,
+                    "lat": gps_lat,
+                    "lon": gps_lon,
+                    "ts_epoch": gps_ts,
+                    "source": gps_src,
+                },
 
                 "artifacts": {
                     "image": img_path,

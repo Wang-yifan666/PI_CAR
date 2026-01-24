@@ -14,6 +14,8 @@ import src.global_ctx as ctx
 from src.core.fsm import FSM_core
 from src.services.dector import DECTOR_ser
 from src.drivers.uart import STM32Communicator
+from src.services.gps_service import GPSService
+from src.core.patrol_logic import PatrolService
 
 # 导入日志
 from src.utils.logger import sys_logger as logger
@@ -43,7 +45,7 @@ def uart_pump(uart):
         if cmd is None:
             continue
 
-        uart.send_command(str(cmd), wait_for_response=True)
+        uart.send_command(str(cmd), wait_for_response = False)
 
 def main() :
     logger.info("[ INIT ] System started up")
@@ -86,7 +88,39 @@ def main() :
         ctx.uart = None
         logger.warning("[ UART ] disabled by config")
 
-    # 创建线程
+    # 创建并启动 gps_service
+    gps_cfg = ctx.config.get("gps", {})
+    gps_enable = bool(gps_cfg.get("enable", True))
+
+    gps_thread = None
+    if gps_enable:
+        try:
+            gps_thread = GPSService(gps_cfg)  # 你如果构造函数不是这样，按你的改
+            gps_thread.start()
+            logger.info("[ GPS ] service started")
+        except Exception as e:
+            logger.error(f"[ GPS ] failed to start: {e}")
+            gps_thread = None
+    else:
+        logger.warning("[ GPS ] disabled by config")
+
+    # 创建巡逻线程
+    patrol_cfg = ctx.config.get("patrol", {})
+    patrol_enable = bool(patrol_cfg.get("enable", True))
+
+    patrol_thread = None
+    if patrol_enable:
+        try:
+            patrol_thread = PatrolService(patrol_cfg)
+            patrol_thread.start()
+            logger.info("[ PATROL ] service started")
+        except Exception as e:
+            logger.error(f"[ PATROL ] failed to start: {e}")
+            patrol_thread = None
+    else:
+        logger.warning("[ PATROL ] disabled by config")
+
+    # 创建监视和大脑线程
     dector_thread = DECTOR_ser()
     fsm_thread = FSM_core()
 
@@ -114,6 +148,9 @@ def main() :
             if not ( fsm_thread.is_alive() ) :
                 logger.info("[ INIT ] FSM thread exited abnormally, system stop running")
                 break
+            if gps_enable and (gps_thread is not None) and (not gps_thread.is_alive()):
+                logger.info("[ INIT ] GPS service exited abnormally, system stop running")
+                break
 
             logger.info("[ INIT ] Runing ")
 
@@ -133,6 +170,10 @@ def main() :
 
         dector_thread.join(timeout = 2)
         fsm_thread.join(timeout = 2)
+        if gps_thread is not None:
+            gps_thread.join(timeout=2)
+        if patrol_thread is not None:
+            patrol_thread.join(timeout=2)
 
         logger.info("[ INIT ] Stop runing")
 
