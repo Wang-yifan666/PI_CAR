@@ -5,7 +5,7 @@ import sys
 
 # 确定日志保存路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.path.join(BASE_DIR, '../../data/logs')\
+LOG_DIR = os.path.join(BASE_DIR, '../../data/logs')
 
 # 创建日志目录（如果不存在）
 if not os.path.exists(LOG_DIR):
@@ -21,6 +21,8 @@ def _setup_logger():
     logger = logging.getLogger('RoboPatrol')
     # 设置记录级别 >= INFO
     logger.setLevel(logging.INFO)
+    # 防止日志重复打印
+    logger.propagate = False
     
     if not logger.handlers:
         # 设置格式

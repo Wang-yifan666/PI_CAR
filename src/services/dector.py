@@ -2,6 +2,8 @@ import threading
 import time
 import os
 import sys
+import json
+import uuid
 import numpy as np 
 import src.global_ctx as ctx 
 
@@ -39,12 +41,28 @@ class DECTOR_ser( threading.Thread ):
         self.sess = None
         self.input_name = None
         
+        self.classes = []   # 防止加载失败时报错
+        
         self.mode = not AI_READY
         
         self.latest_frame = None            # 只保留最新的图片，防止出现大幅度不同步
         self.result_frame = None            # 存放结果
         self.frame_lock = threading.Lock()  # 线程锁，防止又读又写
         self.stop_capture = False
+        
+        # 当在树莓派上时，不显示图像
+        self.show_window = bool(os.environ.get("DISPLAY")) and bool(ctx.config.get("dector", {}).get("show_window", False))
+        
+        # 用于避免同一个违规情况在每一帧都触发保存导致磁盘爆炸
+        self._last_violation_ts = 0.0
+
+        # Object Found 日志去重（配置化）
+        self._last_logged = {}  # key: class_id -> (cx, cy, ts)
+        log_cfg = ctx.config.get("dector", {}).get("log_dedup", {})
+        self._log_dedup_enable = bool(log_cfg.get("enable", True))
+        self._same_obj_px_th = float(log_cfg.get("same_obj_px_th", 20))
+        self._same_obj_time_th = float(log_cfg.get("same_obj_time_th", 0.5))
+        self._same_obj_iou_th = float(log_cfg.get("same_obj_iou_th", 0.7))
         
         # 日志报告当前模式
         if not AI_READY:
@@ -71,7 +89,7 @@ class DECTOR_ser( threading.Thread ):
             logger.error(f"[ DECTOR ] Category file loading failed {e} ")
     
     # 初始化硬件
-    def _init_hardware(self):
+    def _init_hardware(self): 
         if self.mode :   # 如果为模拟模式,无硬件需要初始化,跳过 
             return 
         
@@ -105,6 +123,7 @@ class DECTOR_ser( threading.Thread ):
     # 处理大量图像，采集最新的一张图像
     def _capture_worker(self):
         logger.info("[ DECTOR ] capture worker starting ... ")
+        logger.info(f"[ DECTOR ] Capture source = {SOURCE_TYPE}")
         
         # 在这里初始化 mss
         local_sct = None
@@ -112,7 +131,8 @@ class DECTOR_ser( threading.Thread ):
             import mss
             local_sct = mss.mss()
             
-        cv2.namedWindow("Live", cv2.WINDOW_NORMAL)
+        if SOURCE_TYPE == "PC_SCREEN" :     # 只有电脑模式显示窗口
+            cv2.namedWindow("Live", cv2.WINDOW_NORMAL)
 
         while not self.stop_capture:
             try :
@@ -131,7 +151,7 @@ class DECTOR_ser( threading.Thread ):
                     frame = cv2.resize(frame , (640 , 640))
                     
                 # 模拟
-                elif SOURCE_TYPE  == "MOCK" or self.mock_mode :
+                elif SOURCE_TYPE  == "MOCK" or self.mode :
                     time.sleep(0.1) 
                     frame = np.zeros((640,640,3) , dtype = np.uint8) 
                 
@@ -143,7 +163,7 @@ class DECTOR_ser( threading.Thread ):
                         if self.result_frame is not None :
                             res_img = self.result_frame 
                         else :
-                            np.zeros_like(frame)
+                            res_img = np.zeros_like(frame)
                         
                     # 降低不同步    
                     if SOURCE_TYPE == "PC_SCREEN":
@@ -176,6 +196,188 @@ class DECTOR_ser( threading.Thread ):
         
         return img.astype(np.float32)
     
+    # 计算归一化后中心点距离
+    def _calc_center_dist_norm(self, c1, c2, W, H):
+        dx = float(c1[0]) - float(c2[0])
+        dy = float(c1[1]) - float(c2[1])
+        dist = (dx * dx + dy * dy) ** 0.5
+        denom = float(min(W, H)) if min(W, H) > 0 else 1.0
+        return dist / denom
+
+    # 计算loU
+    def _calc_iou_xyxy(self, a, b):
+        ax1, ay1, ax2, ay2 = map(float, a)
+        bx1, by1, bx2, by2 = map(float, b)
+
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        inter = inter_w * inter_h
+
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    # 检查电瓶车是否违规
+    def _check_violation_ebike_strip(self, dets, W, H):
+        vcfg = ctx.config.get("dector", {}).get("violation", {})
+        if not bool(vcfg.get("enable", False)):
+            return None
+
+        ebike_id = int(vcfg.get("ebike_class_id", 0))
+        strip_id = int(vcfg.get("strip_class_id", 2))
+
+        ebike_min_area_norm = float(vcfg.get("ebike_min_area_norm", 0.08))
+        center_dist_norm_th = float(vcfg.get("center_dist_norm", 0.25))
+
+        cooldown_s = float(vcfg.get("cooldown_s", 1.0))
+        now = time.time()
+        if (now - self._last_violation_ts) < cooldown_s:
+            return None
+
+        ebikes = [d for d in dets if int(d.get("class_id", -1)) == ebike_id]
+        strips = [d for d in dets if int(d.get("class_id", -1)) == strip_id]
+        if len(ebikes) == 0 or len(strips) == 0:
+            return None
+
+        # 先筛“近”的电瓶车（框面积足够大）
+        near_ebikes = []
+        for e in ebikes:
+            area = float(e.get("area", 0))
+            area_norm = area / float(W * H + 1.0)
+            if area_norm >= ebike_min_area_norm:
+                e["_area_norm"] = area_norm
+                near_ebikes.append(e)
+
+        if len(near_ebikes) == 0:
+            return None
+
+        # 找一对最可能的违规组合（距离越近越好，面积/置信度越高越好）
+        best_pair = None
+        best_score = -1.0
+
+        for e in near_ebikes:
+            for s in strips:
+                dist_norm = self._calc_center_dist_norm(e.get("center", [0,0]), s.get("center", [0,0]), W, H)
+                if dist_norm <= center_dist_norm_th:
+                    conf_e = float(e.get("conf", 0.0))
+                    conf_s = float(s.get("conf", 0.0))
+                    score = (float(e.get("_area_norm", 0.0)) * 2.0) + (1.0 - dist_norm) + (conf_e + conf_s) * 0.5
+                    if score > best_score:
+                        best_score = score
+                        best_pair = (e, s, dist_norm)
+
+        if best_pair is None:
+            return None
+
+        e, s, dist_norm = best_pair
+
+        # 通过判定 -> 更新节流时间戳
+        self._last_violation_ts = now
+
+        violation_ev = {
+            "type": "violation",
+            "rule": "ebike_with_strip_nearby",
+            "ts": now,
+            "img_size": [int(W), int(H)],
+
+            "dist_norm": float(dist_norm),
+            "ebike_area_norm": float(e.get("_area_norm", 0.0)),
+
+            "ebike": {
+                "class_id": int(e.get("class_id")),
+                "class_name": e.get("class_name"),
+                "conf": float(e.get("conf")),
+                "bbox_xyxy": e.get("bbox_xyxy"),
+                "center": e.get("center"),
+                "area": int(e.get("area")),
+            },
+            "strip": {
+                "class_id": int(s.get("class_id")),
+                "class_name": s.get("class_name"),
+                "conf": float(s.get("conf")),
+                "bbox_xyxy": s.get("bbox_xyxy"),
+                "center": s.get("center"),
+                "area": int(s.get("area")),
+            },
+        }
+
+        return violation_ev
+
+    # 违规存证,保存图片 + 通过JSON保存基本信息
+    def _save_violation_to_data(self, violation_ev, img_bgr, draw_bgr=None):
+        try:
+            vcfg = ctx.config.get("dector", {}).get("violation", {})
+
+            save_enable = bool(vcfg.get("save_enable", True))
+            if not save_enable:
+                return None
+
+            save_dir_cfg = str(vcfg.get("save_dir", "data"))
+            save_draw_img = bool(vcfg.get("save_draw_img", True))
+
+            # 计算项目根目录：src/services/dector.py -> ../../ 即项目根
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(base_dir, "../../"))
+
+            # data 目录（可配置）
+            data_dir = os.path.join(project_root, save_dir_cfg)
+
+            # 通过新建日期子目录，避免 data/ 混乱
+            day_str = time.strftime("%Y%m%d", time.localtime())
+            out_dir = os.path.join(data_dir, f"violations_{day_str}")
+            os.makedirs(out_dir, exist_ok=True)
+
+            ts_ms = int(time.time() * 1000)
+            uid = uuid.uuid4().hex[:8]
+            prefix = f"violation_{ts_ms}_{uid}"
+
+            img_path = os.path.join(out_dir, prefix + ".jpg")
+            json_path = os.path.join(out_dir, prefix + ".json")
+
+            # 选择保存画框图还是原图
+            save_img = draw_bgr if (save_draw_img and draw_bgr is not None) else img_bgr
+
+            ok = cv2.imwrite(img_path, save_img)
+            if not ok:
+                logger.warning(f"[ DECTOR ] violation image save failed : {img_path}")
+                return None
+
+            # JSON 只保存“基本信息”
+            meta = {
+                "type": violation_ev.get("type", "violation"),
+                "rule": violation_ev.get("rule", "unknown"),
+                "ts": violation_ev.get("ts", time.time()),
+                "img_size": violation_ev.get("img_size", None),
+
+                "dist_norm": violation_ev.get("dist_norm", None),
+                "ebike_area_norm": violation_ev.get("ebike_area_norm", None),
+
+                "ebike": violation_ev.get("ebike", {}),
+                "strip": violation_ev.get("strip", {}),
+
+                "artifacts": {
+                    "image": img_path,
+                    "json": json_path,
+                },
+            }
+
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"[ DECTOR ][ violation ] saved : img={img_path} json={json_path}")
+
+            return meta["artifacts"]
+
+        except Exception as e:
+            logger.error(f"[ DECTOR ] save violation error : {e}")
+            return None
+
     # 后处理,yolov5结果处理
     def _yolo_postprocess(self, outputs, original_img):
         output = outputs[0][0]
@@ -212,6 +414,10 @@ class DECTOR_ser( threading.Thread ):
         # 只处理幸存下来的框
         draw_img = original_img.copy()
         
+        # 优先上报 violation 事件
+        H, W = original_img.shape[:2]
+        dets = []
+
         if len(indices) > 0:
             for i in indices.flatten():
                 box = boxes[i]
@@ -225,18 +431,92 @@ class DECTOR_ser( threading.Thread ):
                 label = f"{name} {score:.2f}"
                 cv2.putText(draw_img, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
-                logger.info(f"[ DECTOR ] Object Found: {name} (Conf: {score:.2f})")
-                
-                evidence = {
+                H, W = original_img.shape[:2]
+
+                # 避免负数/越界
+                x1 = max(0, x)
+                y1 = max(0, y)
+                x2 = min(W - 1, x + w)
+                y2 = min(H - 1, y + h)
+
+                # 画框时也用裁剪后的坐标
+                cv2.rectangle(draw_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                name = self.classes[class_id] if self.classes else str(class_id)
+                label = f"{name} {score:.2f}"
+                cv2.putText(draw_img, label, (x1, max(0, y1-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                # 不传整张图片
+                cx_i = int((x1 + x2) / 2)
+                cy_i = int((y1 + y2) / 2)
+                area = int((x2 - x1) * (y2 - y1))
+
+                if self._log_dedup_enable:
+                    key = int(class_id)
+                    now = time.time()
+
+                    last = self._last_logged.get(key)
+                    if last is None:
+                        should_log = True
+                    else:
+                        lx, ly, lts, lbox = last
+                        dt = now - lts
+                        dist = ((cx_i - lx) ** 2 + (cy_i - ly) ** 2) ** 0.5
+                        iou = self._calc_iou_xyxy([x1, y1, x2, y2], lbox)
+
+                        # 只要“足够像同一个目标”（IoU高 或 中心点近）并且仍在时间窗内 -> 不重复打印
+                        same_obj = ((iou >= self._same_obj_iou_th) or (dist < self._same_obj_px_th)) and (dt < self._same_obj_time_th)
+                        should_log = not same_obj
+
+                    if should_log:
+                        logger.info("[ DECTOR ] Object Found: %s (id=%d, Conf: %.2f)", label, class_id, score)
+                        self._last_logged[key] = (cx_i, cy_i, now, [x1, y1, x2, y2])
+                else:
+                    logger.info("[ DECTOR ] Object Found: %s (id=%d, Conf: %.2f)", label, class_id, score)
+
+                dets.append({
                     "type": "detection",
+                    "class_id": int(class_id),
                     "class_name": name,
                     "conf": float(score),
-                    "frame": original_img
-                }
-                
-                if not ctx.dector_queue.full():
-                    ctx.dector_queue.put(evidence)
+                    "bbox_xyxy": [int(x1), int(y1), int(x2), int(y2)],
+                    "center": [cx_i, cy_i],
+                    "area": area,
+                    "img_size": [int(W), int(H)],
+                    "ts": time.time(),
+                })
 
+        # 违规判定（同帧关系：电瓶车 + 插排 近距离）
+        violation_ev = self._check_violation_ebike_strip(dets, W, H)
+        if violation_ev is not None:
+            logger.info(f"[ DECTOR ][ VIOLATION ] : ebike+strip near , dist_norm={violation_ev['dist_norm']:.3f} area_norm={violation_ev['ebike_area_norm']:.3f}")
+
+            # 存证（保存画框图优先；保存路径写回事件）
+            artifacts = self._save_violation_to_data(violation_ev, original_img, draw_img)
+            if artifacts is not None:
+                violation_ev["artifacts"] = artifacts
+
+            # 如果满了：丢掉最旧的，保证最新结果能进来（推荐）
+            try:
+                if ctx.dector_queue.full():
+                    ctx.dector_queue.get_nowait()
+                ctx.dector_queue.put_nowait(violation_ev)
+            except Exception:
+                pass
+
+        else:
+            # 如果没有违规就上报本帧detection
+
+            if len(dets) > 0:
+                dets.sort(key=lambda d: (d.get("area", 0), d.get("conf", 0.0)), reverse=True)
+                best = dets[0]
+                try:
+                    if ctx.dector_queue.full():
+                        ctx.dector_queue.get_nowait()
+                    ctx.dector_queue.put_nowait(best)
+                except Exception:
+                    pass
+        
         # 保存画好的图供显示
         with self.frame_lock:
             self.result_frame = draw_img
@@ -244,6 +524,15 @@ class DECTOR_ser( threading.Thread ):
     # 运行
     def run(self):
         logger.info("[ DECTOR ]: Thread starting")
+        
+        logger.info(
+            f"[ DECTOR ] Boot: AI_READY={AI_READY}, SOURCE_TYPE={SOURCE_TYPE}, mode={'MOCK' if self.mode else 'REAL'}, "
+            f"conf_threshold={ctx.config['dector'].get('conf_threshold')}, "
+            f"target_classes={ctx.config['dector'].get('target_classes')}"
+        )        
+        logger.info("[ DECTOR ] log_dedup: enable=%s px=%s time=%s iou=%s",
+            self._log_dedup_enable, self._same_obj_px_th, self._same_obj_time_th, self._same_obj_iou_th)
+        
         self._load_classes()
         self._init_hardware()
         
@@ -287,23 +576,25 @@ class DECTOR_ser( threading.Thread ):
                     img_bgr = cv2.cvtColor(current_img, cv2.COLOR_RGB2BGR)
                     self._yolo_postprocess(outputs, img_bgr)
                     
-                    # # 如果是电脑模式，显示实时画面
-                    # if SOURCE_TYPE == "PC_SCREEN" and current_img is not None:
-                    #     show_img = cv2.cvtColor(current_img, cv2.COLOR_RGB2BGR)
-                    #     cv2.imshow("RoboPatrol Live", show_img)
-                    #     cv2.waitKey(1)
-
-                    
                 except Exception as e:
                     logger.error(f"[ DECTOR ]: Inference Error: {e}")
                     time.sleep(1)
 
         # 退出清理
         self.stop_capture = True
-        if self.picam2: self.picam2.stop()
+        if self.picam2:
+            try:
+                self.picam2.stop()
+                logger.info("[ DECTOR ] Picamera2 stopped")
+            except Exception as e:
+                logger.warning(f"[ DECTOR ] Picamera2 stop failed: {e}")
+                
         # sct 在子线程里会自动销毁
-        try:
-            cv2.destroyAllWindows()
-        except:
-            pass
+        if SOURCE_TYPE == "PC_SCREEN" :
+            try:
+                cv2.destroyAllWindows()
+                logger.info("[ DECTOR ] OpenCV windows destroyed successfully")
+            except Exception as e:
+                logger.warning(f"[ DECTOR ] cv2.destroyAllWindows failed: {e}")
+                
         logger.info("[ DECTOR ] Thread finished")

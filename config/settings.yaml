@@ -1,14 +1,84 @@
 # 全局的配置文件
 
 # 串口相关
-uart :
-  baudrate : 115200
+uart:
+  enable: true
+
+  port: "COM10"          # Windows 示例；树莓派常见: "/dev/ttyUSB0" 或 "/dev/ttyAMA0"
+  baudrate: 115200
+  timeout: 1.0          # Serial.read 超时（秒）
+
+  cmd_timeout: 2.0      # send_command 等待 OK/ERR 超时（秒）
+  max_cmd_len: 64       # STM32 单条命令最大长度
+
+  loop_sleep_s: 0.01    # 接收线程主循环 sleep
+  cpu_sleep_s: 0.01     # 无数据时 sleep
+
+  log_rx_line: true     # 打印数据
+  log_tx_cmd: true      # 打印发送的命令
+  log_gps: true         # 打印 GPS
 
 # 视觉相关
 dector :
   model_path : "models/best.onnx"  # 模型文件
-  class_file: "models/classes.txt" # 类别文件
+  class_file : "models/classes.txt" # 类别文件
 
-  conf_threshold: 0.60 # 置信度阈值
-  target_classes: [0 , 1 , 2]
+  conf_threshold : 0.60 # 置信度阈值
+  target_classes : [0 , 1 , 2]   # 需要检测的类别
+
+  show_window : true # 进行显示
+
+  violation :
+    enable : true # 开启
+
+    cooldown_s: 60.0      # 该事件内不会村第二次
+
+    ebike_class_id : 0 
+    fire_class_id : 1 
+    strip_class_id : 2
+
+    # 判定足够近的条件，满足任一即为违规
+    ebike_min_area_norm: 0.1  # 面积重合比例
+    center_dist_norm: 0.4     # 中心点距离
+
+  log_dedup :     # 防止同一目标多次标记
+    enable : true
+    same_obj_px_th: 100         # 中心点移动小于该像素认为同一个目标
+    same_obj_time_th: 1         # 在该时间窗口内被认为同一个物体
+    same_obj_iou_th: 0        # IoU 大于该值认为同一个目标
   
+# fsm相关
+fsm:
+  rate_hz : 5
+  lost_timeout_s : 0.8
+
+  # 目标类别筛选：空列表表示不筛选
+  target_class_names : [0 , 1 , 2]
+
+  stop_cmd: "S"
+
+  # 控制参数
+  deadband : 0.08
+  ema_alpha : 0.35
+
+  k_vx : 0.40
+  k_vy : 0.60
+  k_wz : 1.20
+
+  max_vx : 0.40
+  max_vy : 0.50
+  max_wz : 1.20
+
+  desired_area_norm : 0.08
+
+  # 巡逻策略
+  patrol_vx : 0.15
+  patrol_wz : 0.25
+  patrol_wz_freq : 0.8
+  
+uploader : 
+  enable : true
+  endpoint : "https://"  # 目标网站
+  zip_root : "data"                 # 默认打包根目录
+  zip_output_dir : "zips"   # zip 输出目录
+  marker_suffix : "uploaded"        # 上传完成标记
