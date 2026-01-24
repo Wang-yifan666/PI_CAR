@@ -115,10 +115,26 @@ cd RoboPatrol_Pi
 # 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
+````
 
-# 安装依赖
-pip install -r requirements.txt
+### 2. 安装依赖（PC / 树莓派分离）
+
+本项目将依赖分为两套，便于在 PC 端调试与在树莓派端部署：
+
+* **PC 端调试（支持 cv2.imshow 窗口显示）**：安装 `requirements-pc.txt`
+* **树莓派部署（无显示器/更轻量）**：安装 `requirements-pi.txt`
+
+```bash
+# PC 端（Windows / Ubuntu Desktop）
+pip install -r requirements-pc.txt
+
+# 树莓派端（建议使用 headless 版本 OpenCV）
+pip install -r requirements-pi.txt
 ```
+
+> 说明：树莓派实车模式使用 CSI 摄像头时通常依赖 `picamera2/libcamera` 等系统组件，建议按树莓派环境说明进行系统级安装（不写入 pip requirements）。
+
+
 
 ### 2. 配置参数（settings.yaml）
 
