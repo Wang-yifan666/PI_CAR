@@ -78,7 +78,32 @@ fsm:
   
 uploader : 
   enable : true
-  endpoint : "https://"  # 目标网站
+  endpoint : "https://"             # 目标网站
   zip_root : "data"                 # 默认打包根目录
-  zip_output_dir : "zips"   # zip 输出目录
-  marker_suffix : "uploaded"        # 上传完成标记
+  zip_output_dir : "zips"           # zip 输出目录
+  marker_suffix : "uploaded"        # 上传使用
+  zip_enable: true
+  zip_marker_suffix: ".zipped"      # 打包使用
+  zip_include_patterns: null
+  zip_exclude_dirs: ["logs", "__pycache__"]
+
+# GPS 相关（新增：仅提供巡逻所需最小参数）
+gps:
+  enable: true
+  mode: "replay"          # replay 表示使用NMEA进行模拟
+  source: "uart"          # uart 表示来自 STM32 串口输出：GPS,lat,lon
+  stale_timeout_s: 2.0    # 超过多少秒未更新就认为 GPS 失效（由 gps_service 判定）
+  log_every_s: 2.0        # GPS 日志节流（秒）
+
+# 巡逻相关
+patrol:
+  enable: true
+  loop: true                  # 最后一个点走完回到第一个
+  arrive_radius_m: 3.0        # 到点阈值(米)
+  forward_sec: 4              # 每次直行的秒数
+  turn_threshold_deg: 10      # 偏航超过多少度就先转向
+  waypoints:
+    - [31.231300, 121.474500]
+    - [31.231500, 121.474700]
+    - [31.231450, 121.474900]
+    - [31.231250, 121.474850]
