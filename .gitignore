@@ -1,3 +1,9 @@
+# --- Privacy / personal data ---
+data/
+zips/
+
+*.zip
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
