@@ -56,7 +56,7 @@ class DECTOR_ser( threading.Thread ):
         # 用于避免同一个违规情况在每一帧都触发保存导致磁盘爆炸
         self._last_violation_ts = 0.0
 
-        # Object Found 日志去重（配置化）
+        # Object Found 日志去重
         self._last_logged = {}  # key: class_id -> (cx, cy, ts)
         log_cfg = ctx.config.get("dector", {}).get("log_dedup", {})
         self._log_dedup_enable = bool(log_cfg.get("enable", True))

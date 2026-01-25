@@ -78,6 +78,9 @@ class PatrolService(threading.Thread) :
         self.waypoints = cfg.get("waypoints", []) or []
         self.idx = 0
 
+        self._last_at_base = False
+        self._has_departed_base = False
+        
         # 状态：TURN/GO
         self.state = "TURN"
 
@@ -106,16 +109,19 @@ class PatrolService(threading.Thread) :
             
         return getattr( ctx , "gps_state" , {}) or {}
     
-    # 通过uart发送指令
-    def _emit_gps(self, cmd: str) :
+    # 防止与fsm争抢指令，不直接向下行机发送信息
+    def _emit_gps(self, cmd: str):
         try:
-            q = getattr(ctx, "uart_queue", None)
-            if q is None:
-                return
-            q.put(cmd)
-            logger.info(f"[ PATROL ] emit cmd -> {cmd}")
+            item = {
+                "cmd": str(cmd),
+                "ts": time.time(),
+                "reason": "patrol",
+                "meta": {"wp_idx": self.idx, "state": self.state},
+            }
+            ctx.put_latest(ctx.patrol_cmd_queue, item)
+            logger.info(f"[ PATROL ] suggest cmd -> {cmd} qsize={ctx.patrol_cmd_queue.qsize()}")
         except Exception as e:
-            logger.error(f"[ PATROL ] emit cmd failed: {e}")
+            logger.error(f"[ PATROL ] suggest cmd failed: {e} patrol_q={getattr(ctx,'patrol_cmd_queue',None)}")
             
     # 估计航向，只有超过阈值才更新
     def _update_heading_from_motion(self, lat: float, lon: float, ts: float) :
@@ -186,6 +192,25 @@ class PatrolService(threading.Thread) :
             dist = _haversine_m(lat, lon, tgt_lat, tgt_lon)
             brng_tgt = _bearing_deg(lat, lon, tgt_lat, tgt_lon)     
             
+            # 基地回归触发：wp[0]作为基地
+            base_lat, base_lon = float(self.waypoints[0][0]), float(self.waypoints[0][1])
+            dist_base = _haversine_m(lat, lon, base_lat, base_lon)
+            at_base = (dist_base <= self.arrive_radius_m)
+
+            # 一旦离开基地半径，允许后续“回到基地”触发打包
+            if not at_base:
+                self._has_departed_base = True
+
+            # 边沿触发：从不在基地到进入基地
+            if self._has_departed_base and at_base and (not self._last_at_base):
+                try:
+                    ctx.pack_event.set()
+                    logger.info(f"[ PATROL ] back to base(wp[0]) dist_base={dist_base:.2f}m -> request pack")
+                except Exception as e:
+                    logger.error(f"[ PATROL ] request pack failed: {e}")
+
+            self._last_at_base = at_base                       
+            
             # 周期性打印状态
             now = time.time()
             if (now - self._last_log_ts) >= self.log_every_s:
@@ -201,7 +226,7 @@ class PatrolService(threading.Thread) :
             if dist <= self.arrive_radius_m:
                 logger.info(f"[ PATROL ] reached wp[{self.idx}] dist={dist:.2f}m")
                 self._next_waypoint()
-                self.state = "TURN"
+                self.state = "TURN"                        
                 time.sleep(0.2)
                 continue     
             

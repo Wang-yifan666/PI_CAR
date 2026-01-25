@@ -4,6 +4,7 @@ import json
 import glob
 import zipfile
 import hashlib
+import fnmatch
 
 from datetime import datetime
 from typing import Dict, Optional, List, Iterable, Tuple
@@ -64,15 +65,29 @@ def _sha256_file(path : str , chunk_size : int = 1024 * 1024 ) -> str :
 def _iter_files(root: str,
                 include_patterns: Optional[List[str]] = None,
                 exclude_dirs: Optional[List[str]] = None) -> Iterable[str]:
-        exclude_dirs = exclude_dirs or []
-        root = os.path.abspath(root)    # 建立绝对路径
-        
-        # 遍历全部文件
-        for dir_path , dirnames , filenames in os.walk(root) : 
-            dirnames[:] = [ d for d in dirnames if d not in exclude_dirs ]
-            
-            for fn in filenames :
-                yield os.path.join( dir_path , fn )
+    exclude_dirs = exclude_dirs or []
+    root = os.path.abspath(root)
+
+    # include_patterns统一成list
+    patterns = None
+    if include_patterns:
+        patterns = [p.strip() for p in include_patterns if str(p).strip()]
+        if not patterns:
+            patterns = None
+
+    for dir_path, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in exclude_dirs]
+
+        for fn in filenames:
+            full = os.path.join(dir_path, fn)
+
+            if patterns is None:
+                yield full
+            else:
+                # 按相对路径和文件名两种方式匹配
+                rel = os.path.relpath(full, root).replace("\\", "/")
+                if any(fnmatch.fnmatch(fn, p) or fnmatch.fnmatch(rel, p) for p in patterns):
+                    yield full
                 
 # 生成显示文件
 def _write_manifest(manifest_path: str, 
@@ -206,7 +221,7 @@ def build_zip(task: zips,
         except Exception:
             pass    
  
-# 快速测试函数
+# 快速函数
 def build_zip_for_data(task_id: Optional[str] = None,
                        meta: Optional[Dict[str, str]] = None,
                        **kwargs) -> str:

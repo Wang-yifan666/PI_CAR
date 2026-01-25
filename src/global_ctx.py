@@ -13,9 +13,9 @@ fsm_queue = queue.Queue( maxsize = 10 )
 # 视觉队列
 dector_queue = queue.Queue( maxsize = 1 )
 # 上传队列
-upload_queue = queue.Queue(maxsize=50)
-# 上传队列
-fsm_queue = queue.Queue(maxsize=10)
+upload_queue = queue.Queue( maxsize = 50 )
+# 巡逻建议队列
+patrol_cmd_queue = queue.Queue( maxsize = 1 )
 
 # 通知所有线程安全
 # 若启动，则退出所有线程
@@ -113,3 +113,8 @@ def get_mission_copy() -> dict:
     with _mission_lock:
         return dict(mission_state)
     
+# 打包需要的参数    
+pack_event = threading.Event()
+lap_count = 0
+pack_in_progress = False
+pack_lock = threading.Lock()
