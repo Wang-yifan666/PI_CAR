@@ -1,12 +1,13 @@
 import serial
 import time
 import threading
+import logging
 from typing import Optional, List, Tuple, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
 
 #导入日志
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
 
 # 读取配置文件
 def _get_uart_cfg():
@@ -126,7 +127,18 @@ class STM32Communicator:
         self._waiting_resp = False
         self._resp_result = None
 
-        logger.info(f"[ UART ] init: port={self.port} baudrate={self.baudrate} timeout={self.timeout} cmd_timeout={self.cmd_timeout}")
+        log_event(
+            logger,
+            source="UART",
+            event="init",
+            key={
+                "port": self.port,
+                "baudrate": self.baudrate,
+                "timeout": self.timeout,
+                "cmd_timeout": self.cmd_timeout,
+            },
+            brief=False,
+        )
         
     # 连接串口设备   
     def connect(self) -> bool:
@@ -142,15 +154,15 @@ class STM32Communicator:
             )
             
             if self.ser.is_open:
-                logger.info(f"[ UART ] Successfully connected to the serial port")
+                log_event(logger, source="UART", event="connect", result="ok", brief=False)
                 self._start_receive_thread()
                 return True
             else:
-                logger.error(f"[ UART ] unable to open the serial port")
+                log_event(logger, source="UART", event="connect", result="fail", reason="open_failed", level=logging.ERROR, brief=False)
                 return False
                 
         except serial.SerialException as e:
-            logger.error(f"[ UART ] unable to connect the serial port: {e}")
+            log_event(logger, source="UART", event="connect", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             return False
         
     # 断开连接
@@ -164,7 +176,7 @@ class STM32Communicator:
                 self.ser.close()
             except Exception:
                 pass
-            logger.info(f"[ UART ] serial port of connecting closed")
+            log_event(logger, source="UART", event="disconnect", result="ok", brief=False)
             
     # 设置命令响应回调函数
     def set_response_callback(self, callback: Callable[[STM32Response], None]):
@@ -203,10 +215,10 @@ class STM32Communicator:
                     time.sleep(self.cpu_sleep_s)
                             
             except serial.SerialException as e:
-                logger.error(f"[ UART ] serial reading failed: {e}")
+                log_event(logger, source="UART", event="receive", result="fail", reason=str(e), level=logging.ERROR)
                 time.sleep(0.1)
             except Exception as e:
-                logger.error(f"[ UART ] receive loop error: {e}")
+                log_event(logger, source="UART", event="receive", result="fail", reason=str(e), level=logging.ERROR)
                 time.sleep(0.1)
             
             time.sleep(self.loop_sleep_s)  # 短暂休眠避免CPU占用过高
@@ -218,7 +230,7 @@ class STM32Communicator:
         line = line.replace('\r', '')
 
         if self.log_rx_line:
-            logger.info("[ UART ] RX <- %s", line)
+            log_event(logger, source="UART", event="rx", key={"line": line}, level=logging.DEBUG)
         
         # 检查是否是GPS数据
         if line.startswith("GPS,"):
@@ -227,7 +239,7 @@ class STM32Communicator:
         
         # 检查是否是启动提示
         if line.startswith("BOOT,OK"):
-            logger.info(f"[ UART ] STM32 have opend")
+            log_event(logger, source="UART", event="boot", result="ok", brief=False)
             if self.response_callback:
                 self.response_callback(STM32Response(True, 0, [line], line))
             return
@@ -293,11 +305,11 @@ class STM32Communicator:
                         self.gps_callback(lat, lon)
                     else:
                         if self.log_gps:
-                            logger.info(f"[ UART ] GPS is {lat:.7f},{lon:.7f}")
+                            log_event(logger, source="UART", event="gps", key={"lat": round(lat,7), "lon": round(lon,7)}, level=logging.DEBUG)
                 else:
-                    logger.warning(f"[ UART ] Without GPS position")
+                    log_event(logger, source="UART", event="gps", result="missing", level=logging.WARNING)
         except Exception as e:
-            logger.error(f"[ UART ] GPS parsing error: {e}")
+            log_event(logger, source="UART", event="gps", result="fail", reason=str(e), level=logging.ERROR)
     
     # 发送命令
     def send_command(self, command: str, wait_for_response: bool = True, 
@@ -314,7 +326,7 @@ class STM32Communicator:
             STM32Response对象或None
         """
         if not self.ser or not self.ser.is_open:
-            logger.error(f"[ UART ] serial port not connected")
+            log_event(logger, source="UART", event="send", result="fail", reason="not_connected", level=logging.ERROR, brief=False)
             return None
 
         if timeout is None:
@@ -327,7 +339,7 @@ class STM32Communicator:
             
             # 检查命令长度
             if len(command) > self.max_cmd_len:
-                logger.error(f"[ UART ] warning: len{len(command)} exceeded the limit {self.max_cmd_len}")
+                log_event(logger, source="UART", event="send", result="fail", reason="cmd_len_exceed", key={"len": len(command), "limit": self.max_cmd_len}, level=logging.ERROR)
                 return None
             
             try:
@@ -340,7 +352,7 @@ class STM32Communicator:
 
                 # 发送命令
                 if self.log_tx_cmd:
-                    logger.info("[ UART ] TX -> %s", command.strip())
+                    log_event(logger, source="UART", event="tx", key={"cmd": command.strip()}, level=logging.DEBUG)
                 self.ser.write(command.encode('ascii'))
                 self.ser.flush()
                 
@@ -352,13 +364,13 @@ class STM32Communicator:
                 self._waiting_resp = False
 
                 if not ok:
-                    logger.error(f"[ UART ] waiting overtime {timeout}秒")
+                    log_event(logger, source="UART", event="send", result="timeout", key={"timeout": timeout}, level=logging.ERROR, brief=False)
                     return None
 
                 return self._resp_result
                 
             except serial.SerialException as e:
-                logger.error(f"[ UART ] error in sending command: {e}")
+                log_event(logger, source="UART", event="send", result="fail", reason=str(e), level=logging.ERROR, brief=False)
                 self._waiting_resp = False
                 return None
     
@@ -375,7 +387,7 @@ class STM32Communicator:
         while time.time() - start_time < timeout:
             time.sleep(0.01)
         
-        logger.error(f"[ UART ] waiting overtime {timeout}秒")
+        log_event(logger, source="UART", event="send", result="timeout", key={"timeout": timeout}, level=logging.ERROR)
         return None
     
     # ========== 具体命令方法 ==========
@@ -391,7 +403,7 @@ class STM32Communicator:
             seconds: 秒数 (0-9999)
         """
         if not 0 <= seconds <= 9999:
-            logger.error(f"[ UART ] fault : FORWARD time exceed range(0-9999)")
+            log_event(logger, source="UART", event="forward", result="fail", reason="seconds_out_of_range", key={"seconds": seconds}, level=logging.ERROR)
             return None
         
         cmd = f"F{seconds:04d}"
@@ -405,7 +417,7 @@ class STM32Communicator:
             seconds: 秒数 (0-9999)
         """
         if not 0 <= seconds <= 9999:
-            logger.error(f"[ UART ] fault : BACKWARD time exceed range(0-9999)")
+            log_event(logger, source="UART", event="backward", result="fail", reason="seconds_out_of_range", key={"seconds": seconds}, level=logging.ERROR)
             return None
         
         cmd = f"B{seconds:04d}"
@@ -419,7 +431,7 @@ class STM32Communicator:
             seconds: 秒数 (0-999)
         """
         if not 0 <= seconds <= 999:
-            logger.error(f"[ UART ] fault : LEFT_SHIFT time exceed range(0-9999)")
+            log_event(logger, source="UART", event="left_shift", result="fail", reason="seconds_out_of_range", key={"seconds": seconds}, level=logging.ERROR)
             return None
         
         cmd = f"HL{seconds:03d}"
@@ -433,7 +445,7 @@ class STM32Communicator:
             seconds: 秒数 (0-999)
         """
         if not 0 <= seconds <= 999:
-            logger.error(f"[ UART ] fault : RIGHT_SHIFT time exceed range(0-999)")
+            log_event(logger, source="UART", event="right_shift", result="fail", reason="seconds_out_of_range", key={"seconds": seconds}, level=logging.ERROR)
             return None
         
         cmd = f"HR{seconds:03d}"
@@ -447,7 +459,7 @@ class STM32Communicator:
             degrees: 角度 (0-999)
         """
         if not 0 <= degrees <= 999:
-            logger.error(f"[ UART ] fault : LEFT_ROTATE time exceed range(0-999)")
+            log_event(logger, source="UART", event="left_rotate", result="fail", reason="degrees_out_of_range", key={"degrees": degrees}, level=logging.ERROR)
             return None
         
         cmd = f"L0{degrees:03d}"
@@ -461,7 +473,7 @@ class STM32Communicator:
             degrees: 角度 (0-999)
         """
         if not 0 <= degrees <= 999:
-            logger.error(f"[ UART ] fault : RIGHT_ROTATE time exceed range(0-999)")
+            log_event(logger, source="UART", event="right_rotate", result="fail", reason="degrees_out_of_range", key={"degrees": degrees}, level=logging.ERROR)
             return None
         
         cmd = f"R0{degrees:03d}"
@@ -477,7 +489,7 @@ class STM32Communicator:
         response = self.send_command("STATUS")
         
         if not response or not response.success:
-            logger.error(f"[ UART ] Faild to obtian the status")
+            log_event(logger, source="UART", event="status", result="fail", reason="response_invalid", level=logging.ERROR, brief=False)
             return None
         
         return self._parse_status_response(response.data_lines)
@@ -562,10 +574,10 @@ class STM32Communicator:
         """
         if direction not in ['0', '1']:
             print("错误：舵机方向必须是 '0'(左) 或 '1'(右)")
-            logger.error(f"[ UART ] Error: The direction of the servo must be '0' (left) or '1' (right).") 
+            log_event(logger, source="UART", event="servo_relative", result="fail", reason="direction_invalid", key={"direction": direction}, level=logging.ERROR)
         
         if not 0 <= angle <= 99:
-            logger.error(f"[ UART ] fault: The relative angle of the steering gear exceeds the limit range.")
+            log_event(logger, source="UART", event="servo_relative", result="fail", reason="angle_out_of_range", key={"angle": angle}, level=logging.ERROR)
             return None
         
         cmd = f"D{direction}0{angle:02d}"

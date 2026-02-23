@@ -5,12 +5,13 @@ import glob
 import zipfile
 import hashlib
 import fnmatch
+import logging
 
 from datetime import datetime
 from typing import Dict, Optional, List, Iterable, Tuple
 
 import src.global_ctx as ctx
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
 
 class zips:
     def __init__(self , root_path : str , task_id : str , meta: Optional[Dict[str, str]] = None) :
@@ -156,13 +157,12 @@ def build_zip(task: zips,
     zip_path = os.path.join(zip_output_dir , zip_name)
     marker_path = zip_path + marker_suffix
     
-    logger.info(f"[ ZIP ] start: task_id={task.task_id} root={root}")
-    logger.info(f"[ ZIP ] config: include_patterns={include_patterns} exclude_dirs={exclude_dirs}")
-    logger.info(f"[ ZIP ] output_dir: {zip_output_dir}")
-    logger.info(f"[ ZIP ] output: {zip_path}") 
+    log_event(logger, source="ZIP", event="zip_create", action="start", result="begin", key={"root": root}, ids={"task": task.task_id}, brief=False)
+    log_event(logger, source="ZIP", event="config", key={"include_patterns": include_patterns, "exclude_dirs": exclude_dirs}, level=logging.DEBUG)
+    log_event(logger, source="ZIP", event="output", key={"output_dir": zip_output_dir, "zip_path": zip_path}, level=logging.DEBUG)
     
     files = list(_iter_files(root , include_patterns =include_patterns , exclude_dirs = exclude_dirs))
-    logger.info(f"[ ZIP ] files collected: count={len(files)}")
+    log_event(logger, source="ZIP", event="files_collected", key={"count": len(files)}, level=logging.DEBUG)
     
     tmp_manifest = os.path.join(zip_output_dir, f".manifest_{task.task_id}_{_now_time()}.json")
     file_rows: List[Tuple[str, int, str]] = []
@@ -174,12 +174,12 @@ def build_zip(task: zips,
             sha256 = _sha256_file(p)
             file_rows.append((rel, size, sha256))
         except Exception as e:
-            logger.exception(f"[ ZIP ] file stat/hash failed: file={p} err={e}")
+            log_event(logger, source="ZIP", event="file_hash", result="fail", reason=str(e), key={"file": p}, level=logging.ERROR)
         
         
     try:
         _write_manifest(tmp_manifest, task, root, file_rows)
-        logger.debug(f"[ ZIP ] manifest ready: {tmp_manifest}")
+        log_event(logger, source="ZIP", event="manifest", result="ok", key={"tmp": tmp_manifest}, level=logging.DEBUG)
 
         # 写 zip
         with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -189,7 +189,7 @@ def build_zip(task: zips,
                 try:
                     zf.write(p, arcname=arcname)
                 except Exception as e:
-                    logger.exception(f"[ ZIP ] zip write failed: file={p} arcname={arcname} err={e}")
+                    log_event(logger, source="ZIP", event="zip_write", result="fail", reason=str(e), key={"file": p, "arcname": arcname}, level=logging.ERROR)
 
             # 再写 manifest 到 zip 根目录
             zf.write(tmp_manifest, arcname="manifest.json")
@@ -198,16 +198,22 @@ def build_zip(task: zips,
         try:
             with open(marker_path, "w", encoding="utf-8") as f:
                 f.write(datetime.now().isoformat(timespec="seconds"))
-            logger.info(f"[ ZIP ] marker written: {marker_path}")
+            log_event(logger, source="ZIP", event="marker", result="ok", key={"marker": marker_path}, level=logging.DEBUG)
         except Exception as e:
-            logger.exception(f"[ ZIP ] marker write failed: {e}")
+            log_event(logger, source="ZIP", event="marker", result="fail", reason=str(e), level=logging.ERROR)
 
         # 总结日志
         zip_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else -1
         elapsed = time.time() - t0
-        logger.info(
-            f"[ ZIP ] done: task_id={task.task_id} "
-            f"zip_size={zip_size}B files={len(files)} elapsed={elapsed:.2f}s"
+        log_event(
+            logger,
+            source="ZIP",
+            event="zip_create",
+            action="finish",
+            result="ok",
+            key={"zip_size_bytes": zip_size, "files": len(files), "elapsed_s": round(elapsed,2)},
+            ids={"task": task.task_id},
+            brief=True,
         )
 
         return zip_path
@@ -217,7 +223,7 @@ def build_zip(task: zips,
         try:
             if os.path.exists(tmp_manifest):
                 os.remove(tmp_manifest)
-                logger.debug(f"[ ZIP ] tmp manifest removed: {tmp_manifest}")
+                log_event(logger, source="ZIP", event="manifest", action="cleanup", key={"tmp": tmp_manifest}, level=logging.DEBUG)
         except Exception:
             pass    
  
