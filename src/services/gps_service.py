@@ -1,8 +1,9 @@
 import threading
 import time
+import logging
 
 import src.global_ctx as ctx
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
 
 # 只负责吧gps数据传入系统
 class GPSService(threading.Thread) : 
@@ -34,9 +35,17 @@ class GPSService(threading.Thread) :
         self._last_log_ts = 0.0
         self._callback_bound = False
 
-        logger.info(
-            "[ GPS ] init: enable=%s source=%s stale_timeout_s=%.2f log_every_s=%.2f",
-            self.enable, self.source, self.stale_timeout_s, self.log_every_s
+        log_event(
+            logger,
+            source="GPS",
+            event="init",
+            key={
+                "enable": self.enable,
+                "source": self.source,
+                "stale_timeout_s": round(self.stale_timeout_s, 2),
+                "log_every_s": round(self.log_every_s, 2),
+            },
+            brief=False,
         )
         
     # UART 回调
@@ -57,10 +66,10 @@ class GPSService(threading.Thread) :
             now = time.time()
             if ( now - self._last_log_ts ) >= self.log_every_s :
                 self._last_log_ts = now 
-                logger.info("[ GPS ] update: lat=%.7f lon=%.7f", float(lat), float(lon))
+                log_event(logger, source="GPS", event="update", key={"lat": round(float(lat),7), "lon": round(float(lon),7)}, level=logging.DEBUG)
                 
         except Exception as e :
-            logger.error("[ GPS ] callback error: %s", e)
+            log_event(logger, source="GPS", event="update", result="fail", reason=str(e), level=logging.ERROR, brief=False)
     
     # 把GPS回调绑定到UART        
     def _try_bind_callback(self) -> bool :
@@ -72,16 +81,16 @@ class GPSService(threading.Thread) :
             return False 
         
         if not hasattr(uart , "set_gps_callback") :
-            logger.warning("[ GPS ] ctx.uart has no set_gps_callback(), cannot bind")
+            log_event(logger, source="GPS", event="bind_callback", result="skip", reason="no_method", level=logging.WARNING, brief=False)
             return False
         
         try:
             uart.set_gps_callback(self._on_gps)
             self._callback_bound = True
-            logger.info("[ GPS ] gps_callback bound to UART successfully")
+            log_event(logger, source="GPS", event="bind_callback", result="ok", brief=False)
             return True
         except Exception as e:
-            logger.error("[ GPS ] bind callback failed: %s", e)
+            log_event(logger, source="GPS", event="bind_callback", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             return False 
     
     # 检查是否过期    
@@ -115,18 +124,18 @@ class GPSService(threading.Thread) :
                     gs["ok"] = False
                     ctx.gps_state = gs
 
-                logger.warning("[ GPS ] stale: last_update=%.2fs ago (> %.2fs), mark invalid", age, self.stale_timeout_s)
+                log_event(logger, source="GPS", event="stale", result="mark_invalid", key={"age": round(age,2), "timeout": round(self.stale_timeout_s,2)}, level=logging.WARNING, brief=False)
 
         except Exception as e:
-            logger.error("[ GPS ] stale check error: %s", e)
+            log_event(logger, source="GPS", event="stale", result="fail", reason=str(e), level=logging.ERROR, brief=False)
            
     # 运行
     def run(self) :
         if not self.enable : 
-            logger.warning("[ GPS ] disabled by config, thread will exit")
+            log_event(logger, source="GPS", event="start", result="skip", reason="disabled", level=logging.WARNING, brief=False)
             return 
         
-        logger.info("[ GPS ] thread starting")
+        log_event(logger, source="GPS", event="start", result="ok", brief=False)
         
         while( not ctx.system_stop_event.is_set()) and ( not self._callback_bound) :
             ok = self._try_bind_callback()
@@ -137,10 +146,10 @@ class GPSService(threading.Thread) :
             time.sleep(0.3)
             
         if not self._callback_bound : 
-            logger.warning("[ GPS ] callback not bound , still running")
+            log_event(logger, source="GPS", event="bind_callback", result="pending", reason="not_bound", level=logging.WARNING, brief=False)
             
         while not ctx.system_stop_event.is_set() :
             self._check_stale_and_mark_invalid()
             time.sleep(0.2)
             
-        logger.info("[ GPS ] thread finished")
+        log_event(logger, source="GPS", event="stop_request", result="ok", brief=False)

@@ -3,6 +3,7 @@ import sys
 import os
 import yaml
 import threading
+import logging 
 
 # 对路径进行配置,保证能正确导入模块
 sys.path.append( os.path.dirname(os.path.abspath(__file__)) + '/../')
@@ -17,10 +18,7 @@ from src.services.gps_service import GPSService
 from src.core.patrol_logic import PatrolService
 from src.core.fsm import FSMService
 
-# 导入日志
-from src.utils.logger import sys_logger as logger
-
-logger.info("hello user")
+from src.utils.logger import sys_logger as logger, configure_logging, log_event
 
 def load_config() :
     try :
@@ -28,10 +26,10 @@ def load_config() :
         yaml_path = os.path.join(base_dir , '../config/settings.yaml')
         with open ( yaml_path , 'r' , encoding='utf-8') as f :
             ctx.config = yaml.safe_load(f)
-            logger.info("[ INIT ] Configuration file loaded successfully")
+            log_event(logger, source="INIT", event="config_load", result="ok", brief=False)
             return True
     except Exception as e :
-        logger.error(f"[ INIT ] Configuration file loading failed, error message: {e}")
+        log_event(logger, source="INIT", event="config_load", result="fail", reason=str(e), level=logging.ERROR, brief=False)
         return False
 
 # 方便从线程中拿命令
@@ -90,7 +88,7 @@ def uart_pump(uart):
             last_cmd = cmd
             last_ts = now
 
-            # 可选：同步到全局状态，方便日志/调试
+            # 同步到全局状态，方便日志/调试
             try:
                 ctx.set_mission(last_uart_cmd=cmd, last_uart_cmd_ts=now)
             except Exception:
@@ -110,8 +108,36 @@ def _cmd_kind(cmd: str) -> str:
     if c.startswith(("R0", "L0", "D", "A")):
         return "discrete"
 
+def _detect_platform_is_pi() -> tuple[bool, str, str, str]:
+    """检测平台是否为树莓派，返回 (is_pi, result, reason, err)."""
+
+    # 两级检测：先尝试创建，再尝试 import
+    try:
+        from picamera2 import Picamera2  # type: ignore
+        try:
+            _ = Picamera2()
+            return True, "ok", "create_ok", ""
+        except Exception as e:
+            return False, "fail", "create_fail", str(e)
+    except Exception as e:
+        return False, "fail", "import_fail", str(e)
+
 def main() :
-    logger.info("[ INIT ] System started up")
+    is_pi, pf_result, pf_reason, pf_err = _detect_platform_is_pi()
+    configure_logging(is_pi=is_pi, enable_cn=None, stage="main")
+
+    log_event(
+        logger,
+        source="INIT",
+        event="platform_detect",
+        result=pf_result,
+        reason=pf_reason,
+        key={"err": pf_err} if pf_err else None,
+        level=logging.WARNING if pf_result == "fail" else logging.INFO,
+        brief=None,
+    )
+
+    log_event(logger, source="INIT", event="startup", result="begin", brief=None)
 
     if not load_config() :
         return
@@ -133,24 +159,24 @@ def main() :
         # 放到全局上下文，方便 FSM 等模块使用
         ctx.uart = uart
 
-        logger.info(f"[ UART ] init: port={uart.port} baudrate={uart.baudrate} timeout={uart.timeout}")
+        log_event(logger, source="UART", event="init", action="connect", key={"port": uart.port, "baudrate": uart.baudrate, "timeout": uart.timeout}, brief=False)
 
         ok = uart.connect()
         if not ok:
-            logger.warning("[ UART ] connect failed")
+            log_event(logger, source="UART", event="connect", result="fail", brief=False, level=logging.WARNING)
             if uart_required:
-                logger.error("[ INIT ] UART is required, system stop running")
+                log_event(logger, source="INIT", event="startup", result="stop", reason="uart_required", brief=None, level=logging.ERROR)
                 return
             else:
-                logger.warning("[ INIT ] UART not ready, continue without lower machine")
+                log_event(logger, source="INIT", event="startup", result="degraded", reason="uart_not_ready", brief=None, level=logging.WARNING)
         if ok:
             uart_thread = threading.Thread(target=uart_pump, args=(uart,), daemon=True)
             uart_thread.start()
-            logger.info("[ UART ] pump thread started")
+            log_event(logger, source="UART", event="pump_start", result="ok", brief=False)
 
     else:
         ctx.uart = None
-        logger.warning("[ UART ] disabled by config")
+        log_event(logger, source="UART", event="disabled", result="skip", brief=False, level=logging.WARNING)
 
     # 创建并启动 gps_service
     gps_cfg = ctx.config.get("gps", {})
@@ -161,12 +187,12 @@ def main() :
         try:
             gps_thread = GPSService(gps_cfg)  # 你如果构造函数不是这样，按你的改
             gps_thread.start()
-            logger.info("[ GPS ] service started")
+            log_event(logger, source="GPS", event="thread_spawn", action="start", result="ok", key={"thread": "GPSService"}, level=logging.DEBUG, brief=False)
         except Exception as e:
-            logger.error(f"[ GPS ] failed to start: {e}")
+            log_event(logger, source="GPS", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             gps_thread = None
     else:
-        logger.warning("[ GPS ] disabled by config")
+        log_event(logger, source="GPS", event="disabled", result="skip", level=logging.WARNING, brief=False)
 
     # 创建巡逻线程
     patrol_cfg = ctx.config.get("patrol", {})
@@ -177,65 +203,60 @@ def main() :
         try:
             patrol_thread = PatrolService(patrol_cfg)
             patrol_thread.start()
-            logger.info("[ PATROL ] service started")
+            log_event(logger, source="PATROL", event="thread_spawn", action="start", result="ok", key={"thread": "PatrolService"}, level=logging.DEBUG, brief=False)
         except Exception as e:
-            logger.error(f"[ PATROL ] failed to start: {e}")
+            log_event(logger, source="PATROL", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             patrol_thread = None
     else:
-        logger.warning("[ PATROL ] disabled by config")
+        log_event(logger, source="PATROL", event="disabled", result="skip", level=logging.WARNING, brief=False)
 
     # 创建监视和大脑线程
     dector_thread = DECTOR_ser()
     fsm_thread = FSMService()
 
     # 启动线程
-    logger.info("-" * 30)
+    log_event(logger, source="INIT", event="threads", action="start_bar", result="ok", brief=False)
     dector_thread.start()
     fsm_thread.start()
-    logger.info("-" * 30)
-    logger.info("[ INIT ] System startup completed")
+    log_event(logger, source="INIT", event="startup", result="ok", brief=None)
 
-    logger.info("[ INIT ] The system is currently running. Press Ctrl+C to stop the system")
+    log_event(logger, source="INIT", event="running", result="ok", brief=False)
 
     try :
         while True :
-            # UART 不再用 is_alive 检查（它不是线程）
             if uart_enable and ctx.uart is not None:
                 uart_ok = (ctx.uart.ser is not None) and getattr(ctx.uart.ser, "is_open", False)
                 if uart_required and (not uart_ok):
-                    logger.info("[ INIT ] UART disconnected and required, system stop running")
+                    log_event(logger, source="INIT", event="health", result="stop", reason="uart_required_disconnect", level=logging.WARNING, brief=None)
                     break
 
             if not ( dector_thread.is_alive() ) :
-                logger.info("[ INIT ] DECTOR thread exited abnormally, system stop running")
+                log_event(logger, source="INIT", event="health", result="stop", reason="detect_thread_dead", level=logging.WARNING, brief=None)
                 break
             if not ( fsm_thread.is_alive() ) :
-                logger.info("[ INIT ] FSM thread exited abnormally, system stop running")
+                log_event(logger, source="INIT", event="health", result="stop", reason="fsm_thread_dead", level=logging.WARNING, brief=None)
                 break
             if gps_enable and (gps_thread is not None) and (not gps_thread.is_alive()):
-                logger.info("[ INIT ] GPS service exited abnormally, system stop running")
+                log_event(logger, source="INIT", event="health", result="stop", reason="gps_thread_dead", level=logging.WARNING, brief=None)
                 break
-
-            logger.info("[ INIT ] Running ")
 
             time.sleep(1)
 
     except KeyboardInterrupt :
-        logger.info("+" * 30)
-        logger.info("[ INIT ] The system will stop running upon receiving the stop message")
-
+        log_event(logger,source="INIT",event="stop_request",result="ok",reason="keyboard_interrupt",key={"where": "main_try_except"},brief=False,level=logging.INFO, ) 
+        
     finally:
         ctx.system_stop_event.set()
 
-        # 先通知 uart_pump 退出
+        # 先通知uart_pump退出
         try:
             if hasattr(ctx, "put_latest"):
                 ctx.put_latest(ctx.uart_queue, None)
             else:
                 try:
-                    if ctx.uart_queue.full():
+                    if ctx.uart_queue.full() :
                         ctx.uart_queue.get_nowait()
-                except Exception:
+                except Exception :
                     pass
                 ctx.uart_queue.put_nowait(None)
         except Exception:
@@ -252,21 +273,29 @@ def main() :
         try:
             if ctx.uart is not None:
                 ctx.uart.disconnect()
-        except Exception:
+        except Exception :
             pass
 
-        try: dector_thread.join(timeout=2)
-        except Exception: pass
-        try: fsm_thread.join(timeout=2)
-        except Exception: pass
-        if gps_thread is not None:
-            try: gps_thread.join(timeout=2)
-            except Exception: pass
-        if patrol_thread is not None:
-            try: patrol_thread.join(timeout=2)
-            except Exception: pass
+        try: 
+            dector_thread.join(timeout = 2)
+        except Exception : 
+            pass 
+        try: 
+            fsm_thread.join(timeout = 2)
+        except Exception : 
+            pass
+        if gps_thread is not None :
+            try : 
+                gps_thread.join(timeout = 2)
+            except Exception : 
+                pass
+        if patrol_thread is not None :
+            try :  
+                patrol_thread.join(timeout = 2)
+            except Exception : 
+                pass
 
-        logger.info("[ INIT ] Stop running")
+        log_event(logger, source="INIT", event="stop", result="ok", reason="main_exit", brief=True)
 
 if __name__ == "__main__" :
     main()

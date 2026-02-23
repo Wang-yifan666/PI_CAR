@@ -1,9 +1,10 @@
 import math
 import time
 import threading
+import logging
 
 import src.global_ctx as ctx
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
 
 # 计算球面距离
 def _haversine_m(lat1 : float , lon1 : float , lat2 : float , lon2 : float ) -> float :
@@ -94,9 +95,18 @@ class PatrolService(threading.Thread) :
             self.log_every_s = 1.0
         self._last_log_ts = 0.0
 
-        logger.info(
-            "[ PATROL ] init: enable=%s loop=%s arrive_radius_m=%.2f forward_sec=%d turn_threshold_deg=%.2f",
-            self.enable, self.loop, self.arrive_radius_m, self.forward_sec, self.turn_threshold_deg
+        log_event(
+            logger,
+            source="PATROL",
+            event="init",
+            key={
+                "enable": self.enable,
+                "loop": self.loop,
+                "arrive_radius_m": round(self.arrive_radius_m, 2),
+                "forward_sec": self.forward_sec,
+                "turn_threshold_deg": round(self.turn_threshold_deg, 2),
+            },
+            brief=False,
         )        
     
     # 获取最新的GPS    
@@ -119,9 +129,9 @@ class PatrolService(threading.Thread) :
                 "meta": {"wp_idx": self.idx, "state": self.state},
             }
             ctx.put_latest(ctx.patrol_cmd_queue, item)
-            logger.info(f"[ PATROL ] suggest cmd -> {cmd} qsize={ctx.patrol_cmd_queue.qsize()}")
+            log_event(logger, source="PATROL", event="suggest", key={"cmd": cmd, "qsize": ctx.patrol_cmd_queue.qsize()}, level=logging.DEBUG)
         except Exception as e:
-            logger.error(f"[ PATROL ] suggest cmd failed: {e} patrol_q={getattr(ctx,'patrol_cmd_queue',None)}")
+            log_event(logger, source="PATROL", event="suggest", result="fail", reason=str(e), key={"q": getattr(ctx,'patrol_cmd_queue',None)}, level=logging.ERROR, brief=False)
             
     # 估计航向，只有超过阈值才更新
     def _update_heading_from_motion(self, lat: float, lon: float, ts: float) :
@@ -150,14 +160,14 @@ class PatrolService(threading.Thread) :
     # 运行
     def run(self) :
         if not self.enable:
-            logger.warning("[ PATROL ] disabled by config, thread will exit")
+            log_event(logger, source="PATROL", event="start", result="skip", reason="disabled", level=logging.WARNING, brief=False)
             return
 
         if (not isinstance(self.waypoints, list)) or len(self.waypoints) < 2:
-            logger.error("[ PATROL ] need at least 2 waypoints")
+            log_event(logger, source="PATROL", event="start", result="fail", reason="waypoints_lt2", level=logging.ERROR, brief=False)
             return
 
-        logger.info(f"[ PATROL ] start: n_waypoints={len(self.waypoints)} loop={self.loop}")
+        log_event(logger, source="PATROL", event="start", result="ok", key={"n_waypoints": len(self.waypoints), "loop": self.loop}, brief=False)
         
         self.idx = 0 
         self.state = "TURN"
@@ -165,7 +175,7 @@ class PatrolService(threading.Thread) :
         while not ctx.system_stop_event.is_set() :
             # loop=false 且跑完所有点则结束
             if (not self.loop) and (self.idx >= len(self.waypoints)) :
-                logger.info("[ PATROL ] finished (loop=false)")
+                log_event(logger, source="PATROL", event="finish", result="ok", reason="loop_false", brief=False)
                 break        
             
             gs = self._get_gps()
@@ -205,9 +215,9 @@ class PatrolService(threading.Thread) :
             if self._has_departed_base and at_base and (not self._last_at_base):
                 try:
                     ctx.pack_event.set()
-                    logger.info(f"[ PATROL ] back to base(wp[0]) dist_base={dist_base:.2f}m -> request pack")
+                    log_event(logger, source="PATROL", event="back_to_base", action="request_pack", key={"dist_base": round(dist_base,2)}, brief=False)
                 except Exception as e:
-                    logger.error(f"[ PATROL ] request pack failed: {e}")
+                    log_event(logger, source="PATROL", event="back_to_base", result="fail", reason=str(e), level=logging.ERROR, brief=False)
 
             self._last_at_base = at_base                       
             
@@ -215,16 +225,23 @@ class PatrolService(threading.Thread) :
             now = time.time()
             if (now - self._last_log_ts) >= self.log_every_s:
                 self._last_log_ts = now
-                logger.info(
-                    "[ PATROL ] wp[%d] dist=%.2fm brng_tgt=%.1f heading=%s state=%s",
-                    self.idx, dist, brng_tgt,
-                    ("None" if self._heading_deg is None else f"{self._heading_deg:.1f}"),
-                    self.state
+                log_event(
+                    logger,
+                    source="PATROL",
+                    event="state",
+                    key={
+                        "wp_idx": self.idx,
+                        "dist": round(dist, 2),
+                        "brng_tgt": round(brng_tgt, 1),
+                        "heading": None if self._heading_deg is None else round(self._heading_deg, 1),
+                        "state": self.state,
+                    },
+                    level=logging.DEBUG,
                 )                 
                 
             # 到点,切换下一点，并进入TURN
             if dist <= self.arrive_radius_m:
-                logger.info(f"[ PATROL ] reached wp[{self.idx}] dist={dist:.2f}m")
+                log_event(logger, source="PATROL", event="reached_wp", key={"wp_idx": self.idx, "dist": round(dist,2)}, brief=False)
                 self._next_waypoint()
                 self.state = "TURN"                        
                 time.sleep(0.2)
@@ -274,5 +291,5 @@ class PatrolService(threading.Thread) :
 
             time.sleep(0.05)
 
-        logger.info("[ PATROL ] thread finished")              
+        log_event(logger, source="PATROL", event="stop_request", result="ok", brief=False)              
                                              

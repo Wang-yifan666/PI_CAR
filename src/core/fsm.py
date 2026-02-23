@@ -1,9 +1,10 @@
 import time
 import threading
+import logging
 from typing import Any, Dict, Optional, Tuple
 
 import src.global_ctx as ctx
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
 from src.services.uploader import build_zip_for_data
 
 # 返回时间戳
@@ -45,14 +46,27 @@ class FSMService(threading.Thread) :
         self._last_sent_cmd: str = ""            # 最近一次实际下发的 UART 指令
         self._last_sent_ts: float = 0.0          # 最近一次实际下发的时间戳
         self._last_log_ts: float = 0.0           # 最近一次打印状态日志的时间戳
+        self._uart_out_last_sig: Optional[Tuple[str, str]] = None  # (reason, cmd)
+        self._uart_out_last_ts: float = 0.0
+        self._uart_out_min_interval: float = 5.0
 
         # 缓存最新的patrol建议
         self._patrol_cached_cmd: str = ""
         self._patrol_cached_ts: float = 0.0
 
-        logger.info(
-            "[ FSM ] init: enable=%s hold_after_lost_s=%.2f patrol_stale_s=%.2f cmd_dedup_s=%.2f stop_cmd=%s violation_cmd=%s",
-            self.enable, self.hold_after_lost_s, self.patrol_stale_s, self.cmd_dedup_s, self.stop_cmd, self.violation_cmd
+        log_event(
+            logger,
+            source="FSM",
+            event="init",
+            key={
+                "enable": self.enable,
+                "hold_after_lost_s": round(self.hold_after_lost_s, 2),
+                "patrol_stale_s": round(self.patrol_stale_s, 2),
+                "cmd_dedup_s": round(self.cmd_dedup_s, 2),
+                "stop_cmd": self.stop_cmd,
+                "violation_cmd": self.violation_cmd,
+            },
+            brief=False,
         )    
     
     # 判定是否触发抢夺    
@@ -99,16 +113,37 @@ class FSMService(threading.Thread) :
                 pass
 
         except Exception as e:
-            logger.error("[ FSM ] emit to uart failed: %s", e)
+            log_event(logger, source="FSM", event="uart_emit", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             return
         
         # 周期打印日志
         if (now - self._last_log_ts) >= self.log_every_s:
-            self._last_log_ts = now
-            logger.info("[ FSM ] out=%s reason=%s v_age=%.2fs patrol_age=%.2fs",
-                        cmd, reason,
-                        (now - self._last_violation_ts) if self._last_violation_ts > 0 else 9999.0,
-                        (now - self._patrol_cached_ts) if self._patrol_cached_ts > 0 else 9999.0)
+            sig = (reason, cmd)
+            should_log = False
+
+            if self._uart_out_last_sig is None:
+                should_log = True
+            elif sig != self._uart_out_last_sig:
+                should_log = True
+            elif (now - self._uart_out_last_ts) >= self._uart_out_min_interval:
+                should_log = True
+
+            if should_log:
+                self._uart_out_last_sig = sig
+                self._uart_out_last_ts = now
+                self._last_log_ts = now
+                log_event(
+                    logger,
+                    source="FSM",
+                    event="uart_out",
+                    action=reason,
+                    key={
+                        "cmd": cmd,
+                        "v_age": round((now - self._last_violation_ts) if self._last_violation_ts > 0 else 9999.0, 2),
+                        "patrol_age": round((now - self._patrol_cached_ts) if self._patrol_cached_ts > 0 else 9999.0, 2),
+                    },
+                    level=logging.DEBUG,
+                )
 
     # 读取导航队列
     def _poll_patrol_cmd(self) :
@@ -125,7 +160,13 @@ class FSMService(threading.Thread) :
             self._patrol_cached_ts = float(item.get("ts", _now_ts())) if isinstance(item, dict) else _now_ts()
             
             if ( _now_ts() - self._last_log_ts ) >= self.log_every_s:
-                logger.info("[ FSM ] got patrol cmd=%s age=%.2fs", self._patrol_cached_cmd, _now_ts() - self._patrol_cached_ts)
+                log_event(
+                    logger,
+                    source="FSM",
+                    event="patrol_cmd",
+                    key={"cmd": self._patrol_cached_cmd, "age": round(_now_ts() - self._patrol_cached_ts, 2)},
+                    level=logging.DEBUG,
+                )
 
         except Exception:
             # 解析失败就忽略，不覆盖
@@ -158,10 +199,10 @@ class FSMService(threading.Thread) :
     # 运行
     def run(self) : 
         if not self.enable :
-            logger.warning("[ FSM ] disabled by config, thread will exit")
+            log_event(logger, source="FSM", event="start", result="skip", reason="disabled", level=logging.WARNING, brief=False)
             return 
         
-        logger.info("[ FSM ] start")
+        log_event(logger, source="FSM", event="start", result="ok", brief=False)
 
         while not ctx.system_stop_event.is_set():
             # 读dector
@@ -188,25 +229,25 @@ class FSMService(threading.Thread) :
             time.sleep(0.02)      
             
         self._emit_uart(self.stop_cmd , "shutdown_stop") 
-        logger.info("[ FSM ] finsihed")     
+        log_event(logger, source="FSM", event="stop_request", result="ok", brief=False)
 
     # 到基地，起一个临时线程打包数据
     def _start_pack_thread_once(self, meta=None):
         with ctx.pack_lock:
             if ctx.pack_in_progress:
-                logger.info("[ PACK ] skip: already packing")
+                log_event(logger, source="ZIP", event="pack", result="skip", reason="in_progress", level=logging.DEBUG)
                 return
             ctx.pack_in_progress = True
 
         def _job():
             try:
                 zip_path = build_zip_for_data(meta=meta or {})
-                logger.info(f"[ PACK ] done -> {zip_path}")
+                log_event(logger, source="ZIP", event="pack", result="ok", key={"path": zip_path}, brief=False)
             except Exception as e:
-                logger.exception(f"[ PACK ] failed: {e}")
+                log_event(logger, source="ZIP", event="pack", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             finally:
                 with ctx.pack_lock:
                     ctx.pack_in_progress = False
 
-        threading.Thread(target=_job, daemon=True).start()
-        logger.info("[ PACK ] started background pack thread")
+        threading.Thread(target = _job, daemon = True).start()
+        log_event(logger, source="ZIP", event="pack", action="start", result="ok", level=logging.DEBUG)

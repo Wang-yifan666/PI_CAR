@@ -5,9 +5,11 @@ import sys
 import json
 import uuid
 import numpy as np 
+import logging
 import src.global_ctx as ctx 
 
-from src.utils.logger import sys_logger as logger
+from src.utils.logger import sys_logger as logger, log_event
+from src.services.process_detector import ProcessDetector
 
 # 导入核心库
 try:
@@ -35,11 +37,15 @@ class DECTOR_ser( threading.Thread ):
     def __init__( self ):
         super().__init__()
         
+        import src.global_ctx as ctx 
+        self.ctx = ctx
+        
         self.daemon = True
         self.picam2 = None     # 树莓派的摄像头
         self.sct = None        # 电脑进行截屏
         self.sess = None
         self.input_name = None
+        self.logger = logger
         
         self.classes = []   # 防止加载失败时报错
         
@@ -55,6 +61,10 @@ class DECTOR_ser( threading.Thread ):
         
         # 用于避免同一个违规情况在每一帧都触发保存导致磁盘爆炸
         self._last_violation_ts = 0.0
+        
+        # 选择后端
+        self.backend = str(ctx.config.get("dector", {}).get("backend", "onnx")).lower() # onnx\process\ncnn
+        self.proc_det = None # ProcessDetector实例，只有在backend=process时才会用到
 
         # Object Found 日志去重
         self._last_logged = {}  # key: class_id -> (cx, cy, ts)
@@ -66,12 +76,12 @@ class DECTOR_ser( threading.Thread ):
         
         # 日志报告当前模式
         if not AI_READY:
-            logger.warning(f"[ DECTOR ]: Core library missing ({MISSING_LIB}),Enter simulation mode")
+            log_event(logger, source="DETECT", event="init", result="degraded", reason=f"missing_lib:{MISSING_LIB}", level=logging.WARNING, brief=False)
         else:
             if SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ]: No Raspberry Pi camera, switching to computer screen recording")
+                log_event(logger, source="DETECT", event="init", action="source", result="pc_screen", brief=False)
             elif SOURCE_TYPE == "PI_CAM":
-                logger.info("[ DECTOR ]: Raspberry Pi camera equiped, switching to PI")
+                log_event(logger, source="DETECT", event="init", action="source", result="pi_cam", brief=False)
 
     # 读取类别列表
     def _load_classes(self):
@@ -83,10 +93,10 @@ class DECTOR_ser( threading.Thread ):
 
             with open ( abs_path , 'r' , encoding = 'utf-8') as f :
                 self.classes = [line.strip() for line in f.readlines()]
-            logger.info(f"[ DECTOR ] Category file loaded successfully ,load{len(self.classes)} category labels")
+            log_event(logger, source="DETECT", event="class_load", result="ok", key={"count": len(self.classes)}, brief=False)
         
         except Exception as e :
-            logger.error(f"[ DECTOR ] Category file loading failed {e} ")
+            log_event(logger, source="DETECT", event="class_load", result="fail", reason=str(e), level=logging.ERROR, brief=False)
     
     # 初始化硬件
     def _init_hardware(self): 
@@ -96,7 +106,7 @@ class DECTOR_ser( threading.Thread ):
         try:
             # 树莓派模式
             if SOURCE_TYPE == "PI_CAM":
-                logger.info("[ DECTOR ] Starting Picamera2...")
+                log_event(logger, source="DETECT", event="pi_cam", action="start", result="begin", level=logging.DEBUG, brief=False)
                 self.picam2 = Picamera2()
                 config = self.picam2.create_configuration(main={"size": (640, 640), "format": "RGB888"})
                 self.picam2.configure(config)
@@ -104,7 +114,7 @@ class DECTOR_ser( threading.Thread ):
 
             # 电脑屏幕模式
             elif SOURCE_TYPE == "PC_SCREEN":
-                logger.info("[ DECTOR ] Screen capture will start in worker thread.")
+                log_event(logger, source="DETECT", event="screen_capture", action="init", result="ok", level=logging.DEBUG, brief=False)
 
             # 加载yolov5 (共用)
             model_path = ctx.config['dector']['model_path']
@@ -117,13 +127,12 @@ class DECTOR_ser( threading.Thread ):
             self.input_name = self.sess.get_inputs()[0].name
             
         except Exception as e:
-            logger.error(f"[ DECTOR ] Startup failure: {e}")
+            log_event(logger, source="DETECT", event="startup", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             self.mode = True # 降级为模拟
     
     # 处理大量图像，采集最新的一张图像
     def _capture_worker(self):
-        logger.info("[ DECTOR ] capture worker starting ... ")
-        logger.info(f"[ DECTOR ] Capture source = {SOURCE_TYPE}")
+        log_event(logger, source="DETECT", event="capture_worker", action="start", result="ok", key={"source": SOURCE_TYPE}, brief=False)
         
         # 在这里初始化 mss
         local_sct = None
@@ -184,7 +193,7 @@ class DECTOR_ser( threading.Thread ):
                     time.sleep(0.05) 
                         
             except Exception as e :
-                logger.error(f"[ DECTOR ] : Capture error : {e}")
+                log_event(logger, source="DETECT", event="capture", result="fail", reason=str(e), level=logging.ERROR, brief=False)
                 time.sleep(1)
     
     # 预处理图片,给yolov5
@@ -346,7 +355,7 @@ class DECTOR_ser( threading.Thread ):
 
             ok = cv2.imwrite(img_path, save_img)
             if not ok:
-                logger.warning(f"[ DECTOR ] violation image save failed : {img_path}")
+                log_event(logger, source="DETECT", event="violation_save", result="fail", reason="image_write", key={"img": img_path}, level=logging.WARNING, brief=False)
                 return None
 
             gps = {}
@@ -409,12 +418,12 @@ class DECTOR_ser( threading.Thread ):
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            logger.info(f"[ DECTOR ][ violation ] saved : img={img_path} json={json_path}")
+            log_event(logger, source="DETECT", event="violation_save", result="ok", key={"img": img_path, "json": json_path}, brief=False)
 
             return meta["artifacts"]
 
         except Exception as e:
-            logger.error(f"[ DECTOR ] save violation error : {e}")
+            log_event(logger, source="DETECT", event="violation_save", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             return None
 
     # 后处理,yolov5结果处理
@@ -508,10 +517,10 @@ class DECTOR_ser( threading.Thread ):
                         should_log = not same_obj
 
                     if should_log:
-                        logger.info("[ DECTOR ] Object Found: %s (id=%d, Conf: %.2f)", label, class_id, score)
+                        log_event(logger, source="DETECT", event="object", key={"label": label, "class_id": int(class_id), "conf": round(score,2)}, level=logging.DEBUG)
                         self._last_logged[key] = (cx_i, cy_i, now, [x1, y1, x2, y2])
                 else:
-                    logger.info("[ DECTOR ] Object Found: %s (id=%d, Conf: %.2f)", label, class_id, score)
+                    log_event(logger, source="DETECT", event="object", key={"label": label, "class_id": int(class_id), "conf": round(score,2)}, level=logging.DEBUG)
 
                 dets.append({
                     "type": "detection",
@@ -528,7 +537,7 @@ class DECTOR_ser( threading.Thread ):
         # 违规判定（同帧关系：电瓶车 + 插排 近距离）
         violation_ev = self._check_violation_ebike_strip(dets, W, H)
         if violation_ev is not None:
-            logger.info(f"[ DECTOR ][ VIOLATION ] : ebike+strip near , dist_norm={violation_ev['dist_norm']:.3f} area_norm={violation_ev['ebike_area_norm']:.3f}")
+            log_event(logger, source="DETECT", event="violation", key={"dist_norm": round(violation_ev['dist_norm'],3), "area_norm": round(violation_ev['ebike_area_norm'],3)}, brief=None)
 
             # 存证（保存画框图优先；保存路径写回事件）
             artifacts = self._save_violation_to_data(violation_ev, original_img, draw_img)
@@ -562,15 +571,97 @@ class DECTOR_ser( threading.Thread ):
         
     # 运行
     def run(self):
-        logger.info("[ DECTOR ]: Thread starting")
+        # boot 日志
+        log_event(logger, source="DETECT", event="thread", action="start", result="ok", brief=False)
+
+        ctx = self.ctx 
         
-        logger.info(
-            f"[ DECTOR ] Boot: AI_READY={AI_READY}, SOURCE_TYPE={SOURCE_TYPE}, mode={'MOCK' if self.mode else 'REAL'}, "
-            f"conf_threshold={ctx.config['dector'].get('conf_threshold')}, "
-            f"target_classes={ctx.config['dector'].get('target_classes')}"
+        # process 分支
+        if self.backend == "process" :
+            try : 
+                log_event(self.logger, source="DETECT", event="process_start", result="begin", key={"backend": "process"}, level=logging.DEBUG, brief=False)
+                pcfg = ctx.config.get("dector", {}).get("process", {}) or {}
+                exec_path = str(pcfg.get("exec_path" , ""))
+                args = pcfg.get("args" , []) or []
+
+                if not exec_path : 
+                    log_event(self.logger, source="DETECT", event="process_start", result="fail", reason="empty_exec_path", level=logging.ERROR, brief=False)
+                    return
+
+                self.proc_det = ProcessDetector(exec_path = exec_path , args = args , logger = self.logger)
+                self.proc_det.start() 
+                log_event(self.logger, source="DETECT", event="process_start", action="spawn", result="ok", key={"exec": exec_path, "args": args}, brief=False)
+
+                while not ctx.system_stop_event.is_set() :
+                    msg = self.proc_det.poll(timeout = 0.2) 
+                    if not msg :
+                        if not self.proc_det.is_alive() : 
+                            info = self.proc_det._exit_info() if hasattr(self.proc_det, "_exit_info") else None
+                            log_event(self.logger, source="DETECT", event="process_exit", result="fail", reason="proc_exit", key=info, level=logging.ERROR, brief=False) 
+                            break 
+                        continue
+                    
+                    dets = msg.get("detections", []) or []
+                    if not dets : 
+                        continue 
+                    
+                    d = dets[0]
+                    ev = {
+                        "type": "detection",
+                        "class_id": int(d.get("class_id", -1)),
+                        "class_name": str(d.get("cls", "")),
+                        "conf": float(d.get("conf", 0.0)),
+                        "bbox_xyxy": d.get("xyxy", None),
+                        "ts": float(msg.get("ts", 0.0)),   # 没有 ts 则 fallback 0
+                        "saved_image": msg.get("saved_image", ""),
+                    }
+
+                    try:
+                        if hasattr(ctx , "put_latest") :
+                            ctx.put_latest(ctx.dector_queue , ev)
+                        else:
+                            if ctx.dector_queue.full() :
+                                ctx.dector_queue.get_nowait()
+                            ctx.dector_queue.put_nowait(ev)
+                    except Exception as e:
+                        log_event(self.logger, source="DETECT", event="process_output", action="queue_put", result="fail", reason="queue_put", key={"err": str(e)}, level=logging.WARNING, brief=False)
+
+                info = self.proc_det._exit_info() if hasattr(self.proc_det, "_exit_info") else None
+                log_event(self.logger, source="DETECT", event="process_exit", action="finish", result="ok", key=info, brief=False)
+                # 确保子进程终止
+                if self.proc_det:
+                    self.proc_det.stop()
+                return   # process 分支结束，不再执行后面的 onnx
+            except Exception as e:
+                info = self.proc_det._exit_info() if hasattr(self.proc_det, "_exit_info") else None
+                log_event(self.logger, source="DETECT", event="process_exit", result="fail", reason=str(e), key=info, level=logging.ERROR, brief=False)
+                return
+                
+        log_event(
+            logger,
+            source="DETECT",
+            event="boot",
+            key={
+                "AI_READY": AI_READY,
+                "SOURCE_TYPE": SOURCE_TYPE,
+                "mode": "MOCK" if self.mode else "REAL",
+                "conf_threshold": ctx.config['dector'].get('conf_threshold'),
+                "target_classes": ctx.config['dector'].get('target_classes'),
+            },
+            brief=False,
         )        
-        logger.info("[ DECTOR ] log_dedup: enable=%s px=%s time=%s iou=%s",
-            self._log_dedup_enable, self._same_obj_px_th, self._same_obj_time_th, self._same_obj_iou_th)
+        log_event(
+            logger,
+            source="DETECT",
+            event="log_dedup",
+            key={
+                "enable": self._log_dedup_enable,
+                "px": self._same_obj_px_th,
+                "time": self._same_obj_time_th,
+                "iou": self._same_obj_iou_th,
+            },
+            level=logging.DEBUG,
+        )
         
         self._load_classes()
         self._init_hardware()
@@ -594,7 +685,7 @@ class DECTOR_ser( threading.Thread ):
             if self.mode:
                 time.sleep(1)
                 if int(time.time()) % 10 == 0:
-                    logger.info("[ fake ] ebike founded")
+                    log_event(logger, source="DETECT", event="fake", result="ebike", level=logging.DEBUG, brief=False)
                     fake_ev = {"class_name": "motorcycle", "conf": 0.99, "frame": None}
                     # [修复] 统一队列名
                     if not ctx.dector_queue.full(): ctx.dector_queue.put(fake_ev)
@@ -616,7 +707,7 @@ class DECTOR_ser( threading.Thread ):
                     self._yolo_postprocess(outputs, img_bgr)
                     
                 except Exception as e:
-                    logger.error(f"[ DECTOR ]: Inference Error: {e}")
+                    log_event(logger, source="DETECT", event="inference", result="fail", reason=str(e), level=logging.ERROR, brief=False)
                     time.sleep(1)
 
         # 退出清理
@@ -624,16 +715,16 @@ class DECTOR_ser( threading.Thread ):
         if self.picam2:
             try:
                 self.picam2.stop()
-                logger.info("[ DECTOR ] Picamera2 stopped")
+                log_event(logger, source="DETECT", event="shutdown", action="picam2_stop", result="ok", brief=False)
             except Exception as e:
-                logger.warning(f"[ DECTOR ] Picamera2 stop failed: {e}")
+                log_event(logger, source="DETECT", event="shutdown", action="picam2_stop", result="fail", reason=str(e), level=logging.WARNING, brief=False)
                 
         # sct 在子线程里会自动销毁
         if SOURCE_TYPE == "PC_SCREEN" :
             try:
                 cv2.destroyAllWindows()
-                logger.info("[ DECTOR ] OpenCV windows destroyed successfully")
+                log_event(logger, source="DETECT", event="shutdown", action="cv2_destroy", result="ok", level=logging.DEBUG, brief=False)
             except Exception as e:
-                logger.warning(f"[ DECTOR ] cv2.destroyAllWindows failed: {e}")
+                log_event(logger, source="DETECT", event="shutdown", action="cv2_destroy", result="fail", reason=str(e), level=logging.WARNING, brief=False)
                 
-        logger.info("[ DECTOR ] Thread finished")
+        log_event(logger, source="DETECT", event="stop_request", result="ok", brief=False)

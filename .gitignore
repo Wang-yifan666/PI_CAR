@@ -12,6 +12,20 @@ __pycache__/
 # C extensions
 *.so
 
+# C/C++ build artifacts (detector_cpp)
+detector_cpp/build/
+detector_cpp/CMakeFiles/
+detector_cpp/CMakeCache.txt
+detector_cpp/cmake_install.cmake
+detector_cpp/Makefile
+detector_cpp/*.sln
+detector_cpp/*.vcxproj
+detector_cpp/*.vcxproj.filters
+detector_cpp/*.vcxproj.user
+detector_cpp/*.dir/
+detector_cpp/ALL_BUILD.*
+detector_cpp/ZERO_CHECK.*
+
 # Distribution / packaging
 .Python
 build/

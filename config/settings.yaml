@@ -28,10 +28,12 @@ dector :
 
   show_window : true # 进行显示
 
-  violation :
-    enable : true # 开启
+  backend: "process"      # onnx\process\ncnn 
 
-    cooldown_s: 60.0      # 该事件内不会村第二次
+  violation :             # 违规判定相关
+    enable : true         # 开启
+
+    cooldown_s: 60.0      # 该事件内不会存第二次
 
     ebike_class_id : 0 
     fire_class_id : 1 
@@ -41,11 +43,15 @@ dector :
     ebike_min_area_norm: 0.1  # 面积重合比例
     center_dist_norm: 0.4     # 中心点距离
 
-  log_dedup :     # 防止同一目标多次标记
+  log_dedup :                   # 防止同一目标多次标记
     enable : true
     same_obj_px_th: 100         # 中心点移动小于该像素认为同一个目标
     same_obj_time_th: 1         # 在该时间窗口内被认为同一个物体
-    same_obj_iou_th: 0        # IoU 大于该值认为同一个目标
+    same_obj_iou_th: 0          # IoU 大于该值认为同一个目标
+
+  process:
+    exec_path: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_stub.exe"
+    args: []
   
 # fsm相关
 fsm:
@@ -91,10 +97,10 @@ patrol:
   forward_sec: 4              # 每次直行的秒数
   turn_threshold_deg: 10      # 偏航超过多少度就先转向
   waypoints:
-    - [31.231300, 121.474500]
-    - [31.231500, 121.474700]
-    - [31.231450, 121.474900]
-    - [31.231250, 121.474850]
+    - [30.000000, 120.000000]
+    - [30.000000, 120.000000]
+    - [31.000000, 121.000000]
+    - [30.000000, 121.000000]
 
 # 打包逻辑
 data_pack:
