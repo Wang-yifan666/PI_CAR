@@ -1,74 +1,136 @@
-# RoboPatrol_Pi - 校园智能巡逻小车 (上位机系统)
+# RoboPatrol_Pi
+
+### 校园智能巡逻小车上位机系统
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![Platform](https://img.shields.io/badge/Platform-Raspberry_Pi_5-red.svg)
 ![Status](https://img.shields.io/badge/Status-In_Development-yellow.svg)
 
-## 项目简介
+---
 
-本项目旨在解决校园内电动车/摩托车违规充电问题。系统采用 **上下位机结构**，上位机运行多线程巡逻与检测逻辑，配合 **STM32** 驱动麦克纳姆轮底盘进行全向移动。
+# 项目简介
 
-**核心功能：**
+**RoboPatrol_Pi** 是一套运行在 Raspberry Pi 上的智能巡逻小车上位机系统。
 
-* **自主巡逻**：基于状态机 (FSM) 的逻辑控制，支持手写航点（Waypoints）折线巡逻。
-* **视觉识别**：支持 ONNX 推理或外部检测进程输出。
-* **证据留存**：自动抓拍违规画面，记录时间、地点 (GPS) 并打包存证。
-* **云端同步**：回巢自动连接 Wi-Fi，将证据包上传至服务器。
+本项目针对校园内电动车/摩托车违规充电问题，构建了一个：
+
+> 自主巡逻 + 视觉识别 + 证据存储 + 云端同步 的完整闭环系统
+
+系统采用 **上下位机架构**：
+
+* 上位机（Raspberry Pi）负责：
+
+  * 多线程调度
+  * 巡逻决策
+  * 视觉识别
+  * 数据存储与上传
+
+* 下位机（STM32）负责：
+
+  * 电机驱动
+  * 麦克纳姆轮运动控制
+  * GPS 模块解析
+  * 状态回传
 
 ---
 
-## 系统架构
+# 核心功能
 
-### 1. 硬件架构
-
-* **计算核心**：Raspberry Pi 5 (8GB RAM) 
-* **底盘控制**：STM32F407 + 麦克纳姆轮 (实现全向移动)
-* **视觉传感**：CSI 摄像头
-* **定位模块**：GPS 模块（由下位机解析，上位机接收经纬度结果）
-* **通信链路**：UART
-
-### 2. 软件架构 (多线程模型)
-
-上位机软件采用 **生产者-消费者** 思路，多线程并发协同（以 `main.py` 启动为准）：
-
-1. **Main Thread（主线程）**
-   负责系统初始化、加载配置、启动各线程、看门狗监控与优雅退出（Ctrl+C）。
-
-2. **Vision Thread（DECTOR 线程）**
-   负责图像采集与推理/进程结果接入，将检测结果写入共享队列。内置硬件抽象层，支持三种运行模式自动切换：
-
-   * **实车模式**：检测到 `Picamera2` 时，使用树莓派 CSI 摄像头。
-   * **桌面模式**：缺少相机库时，使用 `mss` 抓取 PC 屏幕。
-   * **模拟模式**：缺少关键依赖时生成虚拟数据维持闭环。
-
-3. **FSM Thread（核心状态机线程）**
-   根据视觉结果、巡逻进度与安全状态进行决策，并输出运动指令（建议：由 FSM 统一下发，避免多源指令冲突）。
-
-4. **UART Thread（串口泵/发送线程）**
-   从 `ctx.uart_queue` 取出命令，调用 `STM32Communicator.send_command()` 下发给下位机；同时接收并解析下位机回传数据（例如 GPS、状态信息）。
-
-5. **GPS Thread（GPSService 线程）**
-   负责将 UART 解析出的 GPS 数据写入全局上下文，并进行 stale 超时检测。
-
-6. **Patrol Thread（巡逻线程 / PatrolService）**
-   负责巡逻策略输出（例如折线巡逻的旋转与直行指令），为 FSM 提供导航意图/建议命令。
-
-> 注：某些线程（如视觉采集）内部可能还会启动 worker 线程用于抓帧/推理，这是模块内部实现细节。
+*  折线航点巡逻（Waypoints）
+*  全向麦克纳姆轮控制
+*  ONNX 推理 / 外部进程检测
+*  自动抓拍违规证据
+*  GPS 定位记录
+*  回巢自动打包上传
+*  支持 PC 仿真闭环测试
 
 ---
 
-## GPS 数据链路
+# 系统架构
 
-### 1) 解析位置
+## 一、硬件架构
 
-GPS 的 NMEA/原始信号在 **下位机 STM32** 侧完成解析，上位机只接收解析后的经纬度结果。
+| 模块             | 说明      |
+| -------------- | ------- |
+| Raspberry Pi 5 | 上位机计算核心 |
+| STM32F407      | 底盘驱动控制  |
+| 麦克纳姆轮          | 实现全向移动  |
+| CSI 摄像头        | 图像采集    |
+| GPS 模块         | 下位机解析定位 |
+| UART           | 上下位机通信  |
 
-### 2) 上报协议（已验证）
+---
 
-下位机通过 UART 上报：
+## 二、软件架构（多线程模型）
+
+系统采用 **生产者-消费者并发模型**，线程之间通过 `ctx` 共享状态与队列。
+
+### 线程说明
+
+### 1 Main Thread
+
+* 加载配置
+* 初始化模块
+* 启动各线程
+* 处理优雅退出（Ctrl+C）
+
+---
+
+### 2 Vision Thread（DECTOR）
+
+负责图像采集与目标检测。
+
+支持三种运行模式：
+
+| 模式   | 条件           | 说明         |
+| ---- | ------------ | ---------- |
+| 实车模式 | 存在 Picamera2 | 使用 CSI 摄像头 |
+| 桌面模式 | 无摄像头         | 使用 mss 抓屏  |
+| 模拟模式 | 无关键依赖        | 生成虚拟检测数据   |
+
+---
+
+### 3 FSM Thread（核心决策层）
+
+* 接收视觉检测结果
+* 接收巡逻建议
+* 输出统一运动指令
+* 避免多源指令冲突
+
+> 建议所有运动指令统一由 FSM 下发。
+
+---
+
+### 4 UART Thread
+
+* 发送控制命令到 STM32
+* 解析回传数据（GPS / 状态）
+* 维护串口心跳
+
+---
+
+### 5 GPS Thread
+
+* 监听 UART 解析结果
+* 更新全局 GPS 状态
+* 进行 stale 超时检测
+
+---
+
+### 6 Patrol Thread
+
+* 根据 Waypoints 计算巡逻路径
+* 输出 TURN / GO 建议命令
+* 与 FSM 协同完成导航
+
+---
+
+# GPS 数据链路
+
+## 下位机上报格式
 
 ```
-GPS,<lat>,<lon>\n
+GPS,<lat>,<lon>
 ```
 
 示例：
@@ -77,149 +139,165 @@ GPS,<lat>,<lon>\n
 GPS,31.231312,121.474597
 ```
 
-### 3) 上位机处理流程
+## 上位机处理流程
 
-UART 驱动识别 `GPS,` 前缀 -> 解析 `lat/lon` -> 触发 `gps_callback` -> `GPSService` 写入 `ctx`。
-
----
-
-## 巡逻策略（手写 Waypoints 折线巡逻）
-
-本项目巡逻不限定圆形轨迹，采用通用的 **折线巡逻**：
-
-* 将巡逻路线离散为一串 **航点（Waypoints）**：`P0, P1, ...`
-* 每段路线为直线：`Pi -> P(i+1)`
-* 到达航点后，切换下一段
-
-**动作序列：**
-
-1. **转向阶段（TURN）**：计算目标航点方向，使用下位机旋转指令一次转到位（`L0xxx / R0xxx`，单位为度）。
-2. **直行阶段（GO）**：按小步长前进（例如 `F0002`），周期性检查距离是否到点、是否需要纠偏。
-3. **到点判定**：距离小于 `arrive_radius_m` 认为到达，进入下一航点。
-
-> 由于上位机目前只使用 GPS，经纬度到米的距离换算采用球面距离（或局部近似）用于“到点判定”。
+UART 线程识别 `GPS,` → 解析经纬度 → 更新 `GPSService` → 写入 `ctx`
 
 ---
 
-## 快速开始
+# 巡逻策略说明
 
-### 1. 环境准备
+采用通用折线巡逻模型：
 
-确保运行在 **Raspberry Pi 5** 上，且系统已启用 UART 和 Camera 接口。
+```
+P0 → P1 → P2 → ... → PN
+```
+
+## 状态流程
+
+### 1️⃣ TURN 阶段
+
+* 计算目标方向
+* 一次性发送旋转指令（L0xxx / R0xxx）
+
+### 2️⃣ GO 阶段
+
+* 小步长前进（Fxxxx）
+* 周期性检查偏航
+
+### 3️⃣ 到点判定
+
+* 球面距离 < arrive_radius_m
+
+---
+
+# 快速开始
+
+## 1️⃣ 克隆项目
 
 ```bash
-# 克隆仓库
 git clone https://github.com/你的用户名/RoboPatrol_Pi.git
 cd RoboPatrol_Pi
+```
 
-# 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
-````
-
-### 2. 安装依赖（PC / 树莓派分离）
-
-本项目将依赖分为两套，便于在 PC 端调试与在树莓派端部署：
-
-* **PC 端调试（支持 cv2.imshow 窗口显示）**：安装 `requirements-pc.txt`
-* **树莓派部署（无显示器/更轻量）**：安装 `requirements-pi.txt`
+## 2️⃣ 创建虚拟环境
 
 ```bash
-# PC 端（Windows / Ubuntu Desktop）
-pip install -r requirements-pc.txt
+python3 -m venv venv
+source venv/bin/activate
+```
 
-# 树莓派端（建议使用 headless 版本 OpenCV）
+---
+
+## 3️⃣ 安装依赖
+
+### PC 调试环境
+
+```bash
+pip install -r requirements-pc.txt
+```
+
+### 树莓派部署环境
+
+```bash
 pip install -r requirements-pi.txt
 ```
 
-> 说明：树莓派实车模式使用 CSI 摄像头时通常依赖 `picamera2/libcamera` 等系统组件，建议按树莓派环境说明进行系统级安装（不写入 pip requirements）。
+---
 
+# 配置说明（settings.yaml）
 
+系统配置集中在 `settings.yaml` 中，主要模块包括：
 
-### 2. 配置参数（settings.yaml）
+* uart
+* gps
+* dector
+* fsm
+* patrol
+* uploader
+* data_pack
 
-**UART 示例：**
+建议详细参数说明见：
 
-```yaml
-uart:
-  enable: true
-  required: false
-  port: "COM10"        # 树莓派上一般为 /dev/ttyAMA0 或 /dev/ttyS0
-  baudrate: 115200
-  timeout: 1.0
 ```
-
-**GPS 示例：**
-
-```yaml
-gps:
-  enable: true
-  source: "uart"
-  stale_timeout_s: 2.0
-  log_every_s: 2.0
-```
-
-**巡逻（手写航点）示例：**
-
-```yaml
-patrol:
-  enable: true
-  loop: true
-  arrive_radius_m: 3.0
-  forward_sec: 2
-  turn_threshold_deg: 8
-  waypoints:
-    - [11.111111, 122.222222]
-    - [11.111211, 122.222322]
-    - [11.111311, 122.222422]
-```
-
-**检测后端（进程模式）示例：**
-
-```yaml
-dector:
-   backend: "process"      # onnx | process | ncnn
-   model_path: "models/best.onnx"
-   class_file: "models/classes.txt"
-   show_window: true
-   process:
-      exec_path: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_stub.exe"
-      args: []
-```
-
-### 3. 运行系统
-
-```bash
-python3 src/main.py
+docs/settings.md
 ```
 
 ---
 
-## PC 端仿真测试（推荐）
+# PC 端闭环仿真测试
 
-在无法移动实车/没有真实 STM32 时，可使用 **com0com** 创建虚拟串口对（如 `COM10 <-> COM11`）：
+当没有真实 STM32 时，可使用虚拟串口对进行测试：
 
-* 上位机程序连接 `COM10`
-* 使用 MOCK 脚本连接 `COM11`，周期性发送：
+### 推荐工具
 
-  ```
-  GPS,31.231312,121.474597
-  ```
+* Windows：com0com
+* Linux：socat
 
-即可验证 UART/GPS/巡逻逻辑闭环。
+示例：
 
-### tool 工具脚本（串口仿真/调试）
-项目包含 `tool/` 文件夹，用于存放开发阶段的辅助小工具脚本，例如：
+```
+COM10 <-> COM11
+```
 
-- **tool/mock_COM11.py**：模拟下位机（STM32）行为，响应指令并周期发送 `GPS,<lat>,<lon>`。
-- **tool/test_process_detector.py**：测试 `ProcessDetector` 解析外部进程输出。
-
-> 使用方法：创建虚拟串口对（如 `COM10 <-> COM11`），上位机连接 `COM10`，然后运行 `tool/mock_COM11.py` 连接 `COM11`。
+* 上位机连接 COM10
+* 运行 mock 工具连接 COM11
 
 ---
 
-## 合作者
-- https://github.com/Wang-yifan666
-- https://github.com/zhurui-f
+# Tool 工具说明
 
-**License**: MIT
+目录：
+
+```
+tool/
+```
+
+包含：
+
+### mock_COM11.py
+
+* 简单 GPS 回放仿真
+
+### mock_COM11_plus.py
+
+* 闭环运动学仿真（命令驱动）
+
+### test_process_detector.py
+
+* 独立测试检测进程模块
+
+---
+
+# 开发调试流程建议
+
+1 先测试 detector
+
+```
+python tool/test_process_detector.py
+```
+
+2 测试 GPS 数据链路
+
+```
+python tool/mock_COM11.py
+```
+
+3 测试完整闭环巡逻
+
+```
+python tool/mock_COM11_plus.py
+```
+
+---
+
+# 合作者
+
+* [https://github.com/Wang-yifan666](https://github.com/Wang-yifan666)
+* [https://github.com/zhurui-f](https://github.com/zhurui-f)
+
+---
+
+# License
+
+MIT License
