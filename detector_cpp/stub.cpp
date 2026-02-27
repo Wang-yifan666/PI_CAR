@@ -58,11 +58,11 @@ static std::string join_segments(const std::vector<std::string>& segs)
     bool first = true;
     for (const auto& s : segs)
     {
-        if (s.empty())
+        if ( s.empty() )
         {
-            continue;
+            continue ;
         }
-        if (!first)
+        if ( !first )
         {
             oss << " | ";
         }
@@ -200,7 +200,7 @@ int main()
                 "",
                 {{"id_frame", std::to_string(frame_id)}}));
 
-        ++frame_id;
+        ++ frame_id;
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }

@@ -4,6 +4,7 @@ import json
 import queue
 import logging
 import time
+import os
 from typing import Optional , Any , Dict , List
 
 from src.utils.logger import sys_logger as logger, log_event
@@ -21,18 +22,24 @@ class ProcessDetector :
 
     def start( self ) -> None :
         
-        cmd = [ self.exec_path] + self.args 
+        cmd = [ self.exec_path ] + self.args 
         
+        self._log_event(event="process_launch", result="start", key={"exec": self.exec_path, "args": self.args})
+        
+        env = os.environ.copy()            # 复制当前环境变量，使opencv的DLL能够被找到
+        opencv_bin = r"D:\\opencv\\opencv_4.12\\build\\x64\\vc16\\bin"
+        env["PATH"] = opencv_bin + os.pathsep + env.get("PATH", "")
+
         self.proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,
+            env=env
         )
         self.start_ts = time.time()
-        threading.Thread( target = self._read_stdout , daemon = True ).start()
-        threading.Thread( target = self._read_stderr , daemon = True ).start()
+        threading.Thread(target=self._read_stdout, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
         
         self._log_event(event="process_start", result="spawn", key={"exec": self.exec_path, "args": self.args}, ids={"pid": self.proc.pid if self.proc else None})
         
@@ -56,7 +63,8 @@ class ProcessDetector :
         self._log_event(event="process_output", action=stream, result="note", key={"line": line}, level=level)
         
     def _read_stdout(self) -> None:
-        assert self.proc and self.proc.stdout
+        if not self.proc or not self.proc.stdout:
+            return
         for line in self.proc.stdout:
             line = line.strip()
             if not line:
@@ -79,7 +87,8 @@ class ProcessDetector :
                 self._log_event(event="process_output", action="json_parse_fail", result="fail", reason=str(e), key={"payload": payload[:200]}, level=logging.WARNING)
     
     def _read_stderr( self ) -> None :
-        assert self.proc and self.proc.stderr
+        if not self.proc or not self.proc.stderr:
+            return
         for line in self.proc.stderr:
             clean = line.rstrip()
             self.stderr_tail.append(clean)

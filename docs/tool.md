@@ -6,7 +6,7 @@
 
 # 一、mock_COM11_plus.py
 
-## 串口闭环运动学仿真器（命令驱动型）
+## 串口闭环运动学仿真器
 
 ### 1. 功能概述
 
@@ -26,7 +26,7 @@
   * `L0090`：左转 90°
   * `R0045`：右转 45°
   * `S / STOP`：停止
-* 使用简化运动学模型进行积分计算：
+* 使用简化运动学模型进行计算：
 
   * 前进速度：`vx`
   * 横移速度：`vy`
@@ -125,7 +125,7 @@ ProcessDetector
 
 ### 2. 工作机制
 
-* 启动 `detector_stub.exe`
+* 启动 `detector_ncnn.exe`（或你自定义的检测可执行程序）
 * 调用：
 
   ```
@@ -143,6 +143,9 @@ ProcessDetector
 * 排查进程异常退出问题
 * 单独联调检测模块（无需运行整套系统）
 
+> 说明：`detector_ncnn.exe` 通常需要 `--param/--bin/...` 参数。
+> 若仅做“进程拉起/退出链路”联调，可替换为 `detector_stub` 或在脚本中补全参数。
+
 ---
 
 # 四、推荐使用顺序
@@ -152,17 +155,17 @@ ProcessDetector
 ### ① 测试检测模块
 
 ```
-python test_process_detector.py
+python tool/test_process_detector.py
 ```
 
 ### ② 测试 GPS 数据流
 
 ```
-python mock_COM11.py
+python tool/mock_COM11.py
 ```
 
 ### ③ 测试完整闭环
 
 ```
-python mock_COM11_plus.py
+python tool/mock_COM11_plus.py
 ```

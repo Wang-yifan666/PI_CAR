@@ -1,4 +1,4 @@
-# --- Privacy / personal data ---
+# Privacy
 data/
 zips/
 
@@ -225,3 +225,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# other
+compile_commands.json
+Thumbs.db
+.DS_Store
+
+# allow only required detector exe from build output
+!detector_cpp/build/
+detector_cpp/build/**
+!detector_cpp/build/Release/
+!detector_cpp/build/Release/detector_ncnn.exe

@@ -1,6 +1,17 @@
-# 系统配置文件说明（settings.yaml）
+# 系统配置文件说明（settings_cpp.yaml / settings.yaml）
 
-本文档详细说明 `settings.yaml` 中各项参数的含义、作用及推荐使用方式。
+本文档详细说明配置文件中各项参数的含义、作用及推荐使用方式。
+
+---
+
+# 配置加载优先级
+
+主程序 `src/main.py` 启动时按以下顺序加载：
+
+1. `config/settings_cpp.yaml`
+2. `config/settings.yaml`
+
+即：若 `settings_cpp.yaml` 存在且非空，则优先使用它。
 
 ---
 
@@ -42,12 +53,12 @@ dector:
 
 | 参数             | 说明                          |
 | -------------- | --------------------------- |
-| model_path     | ONNX 模型路径                   |
+| model_path     | ONNX 模型路径（仅 onnx 后端使用）         |
 | class_file     | 类别文件                        |
 | conf_threshold | 置信度阈值                       |
 | target_classes | 需要检测的类别 ID                  |
 | show_window    | 是否显示检测窗口                    |
-| backend        | 推理后端（onnx / process / ncnn） |
+| backend        | 推理后端（推荐 `process`，由 C++ ncnn 可执行程序完成检测） |
 
 ---
 
@@ -98,6 +109,27 @@ process:
 | --------- | ------- |
 | exec_path | 可执行文件路径 |
 | args      | 启动参数    |
+
+常见配置示例（对应当前仓库）：
+
+```yaml
+dector:
+	backend: process
+	process:
+		exec_path: detector_cpp/build/Release/detector_ncnn.exe
+		args:
+			- --param=models/ncnn/best.ncnn.param
+			- --bin=models/ncnn/best.ncnn.bin
+			- --classes=models/classes.txt
+			- --source=video:data/test.mp4
+			- --imgsz=640
+			- --threads=4
+			- --conf=0.8
+			- --nms=0.45
+			- --out=out0
+			- --debug=0
+			- --topk=20
+```
 
 ---
 
@@ -223,7 +255,7 @@ data_pack:
 
 # 总结
 
-`settings.yaml` 是系统行为的核心控制文件，涵盖：
+`settings_cpp.yaml / settings.yaml` 是系统行为的核心配置入口，涵盖：
 
 * 串口通信
 * 视觉检测
