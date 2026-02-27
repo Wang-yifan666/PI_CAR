@@ -1,0 +1,3 @@
+[submodule "detector_cpp/third_party/ncnn"]
+	path = detector_cpp/third_party/ncnn
+	url = https://github.com/Tencent/ncnn
