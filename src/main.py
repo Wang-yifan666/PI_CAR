@@ -20,16 +20,34 @@ from src.core.fsm import FSMService
 
 from src.utils.logger import sys_logger as logger, configure_logging, log_event
 
-def load_config() :
-    try :
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        yaml_path = os.path.join(base_dir , '../config/settings.yaml')
-        with open ( yaml_path , 'r' , encoding='utf-8') as f :
-            ctx.config = yaml.safe_load(f)
-            log_event(logger, source="INIT", event="config_load", result="ok", brief=False)
-            return True
-    except Exception as e :
-        log_event(logger, source="INIT", event="config_load", result="fail", reason=str(e), level=logging.ERROR, brief=False)
+# 读取配置文件，先读settings_cpp.yaml，读不到再读settings.yaml
+def load_config() :  
+    try:
+        base_dir = os.path.dirname( os.path.abspath(__file__) )
+
+        yaml_candidates = [
+            os.path.join(base_dir, '../config/settings_cpp.yaml'),
+            os.path.join(base_dir, '../config/settings.yaml'),
+        ]
+
+        yaml_path = None
+        for p in yaml_candidates:
+            if os.path.exists(p) and os.path.getsize(p) > 0 : 
+                yaml_path = p
+                break
+
+        if yaml_path is None :
+            raise FileNotFoundError("No config file found or all config files are empty")
+
+        with open(yaml_path, 'r', encoding='utf-8') as f :
+            ctx.config = yaml.safe_load(f) or {}
+
+        log_event(logger, source="INIT", event="config_load", result="ok",
+                  reason=os.path.basename(yaml_path), brief=False)
+        return True
+    except Exception as e:
+        log_event(logger, source="INIT", event="config_load", result="fail",
+                  reason=str(e), level=logging.ERROR, brief=False)
         return False
 
 # 方便从线程中拿命令

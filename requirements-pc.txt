@@ -5,3 +5,6 @@ numpy
 opencv-python
 requests
 mss
+requests
+tqdm
+rich

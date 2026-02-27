@@ -38,7 +38,8 @@
 
 *  折线航点巡逻（Waypoints）
 *  全向麦克纳姆轮控制
-*  ONNX 推理 / 外部进程检测
+*  NCNN 外部进程检测（主链路）
+*  ONNX 内置推理（兼容保留）
 *  自动抓拍违规证据
 *  GPS 定位记录
 *  回巢自动打包上传
@@ -72,7 +73,7 @@
 * 加载配置
 * 初始化模块
 * 启动各线程
-* 处理优雅退出（Ctrl+C）
+* 退出（Ctrl+C）
 
 ---
 
@@ -176,8 +177,8 @@ P0 → P1 → P2 → ... → PN
 ## 1️⃣ 克隆项目
 
 ```bash
-git clone https://github.com/你的用户名/RoboPatrol_Pi.git
-cd RoboPatrol_Pi
+git clone https://github.com/Wang-yifan666/PI_CAR.git
+cd PI_CAR
 ```
 
 ## 2️⃣ 创建虚拟环境
@@ -205,9 +206,14 @@ pip install -r requirements-pi.txt
 
 ---
 
-# 配置说明（settings.yaml）
+# 配置说明（settings_cpp.yaml / settings.yaml）
 
-系统配置集中在 `settings.yaml` 中，主要模块包括：
+程序启动时会优先读取：
+
+1. `config/settings_cpp.yaml`
+2. `config/settings.yaml`
+
+系统配置主要模块包括：
 
 * uart
 * gps
@@ -215,12 +221,54 @@ pip install -r requirements-pi.txt
 * fsm
 * patrol
 * uploader
-* data_pack
 
 建议详细参数说明见：
 
 ```
 docs/settings.md
+```
+
+---
+
+# NCNN 检测链路说明
+
+当前默认检测链路为：
+
+```text
+DECTOR_ser (backend=process)
+  -> ProcessDetector
+  -> detector_cpp/build/Release/detector_ncnn.exe
+```
+
+`detector_ncnn.exe` 通过标准输出持续输出：
+
+```text
+[ NCNN ]{...json...}
+```
+
+Python 侧会解析 JSON 并投递到 `ctx.dector_queue`，供 FSM 决策使用。
+
+---
+
+# C++ 检测器构建（Windows）
+
+项目包含 C++ 检测器源码：
+
+```text
+detector_cpp/detector_ncnn.cpp
+```
+
+可在 VS Code 中使用 CMake Tools 直接构建 `detector_ncnn` 目标，输出示例：
+
+```text
+detector_cpp/build/Release/detector_ncnn.exe
+```
+
+模型与类别文件默认位于：
+
+```text
+models/ncnn/
+models/classes.txt
 ```
 
 ---
@@ -232,7 +280,6 @@ docs/settings.md
 ### 推荐工具
 
 * Windows：com0com
-* Linux：socat
 
 示例：
 
@@ -265,7 +312,7 @@ tool/
 
 ### test_process_detector.py
 
-* 独立测试检测进程模块
+* 独立测试检测子进程（ProcessDetector）
 
 ---
 

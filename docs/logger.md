@@ -271,7 +271,7 @@ log_event(
 | DETECT | 检测模块 | YOLO/违规判定/拍照 |
 | ZIP | 打包模块 | 文件压缩打包 |
 | UPLOAD | 上传模块 | 上传 zip 到服务器 |
-| PROCESS | 子进程管理 | detector_stub.exe 的启动/退出/输出桥接 |
+| PROCESS | 子进程管理 | detector_ncnn.exe（或同类检测进程）的启动/退出/输出桥接 |
 
 ### 9.6 检测/视觉常见词
 

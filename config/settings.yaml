@@ -50,7 +50,7 @@ dector :
     same_obj_iou_th: 0          # IoU 大于该值认为同一个目标
 
   process:
-    exec_path: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_stub.exe"
+    exec_path: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
     args: []
   
 # fsm相关
