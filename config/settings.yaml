@@ -4,7 +4,7 @@
 uart:
   enable: true
 
-  port: "COM10"          # Windows 示例；树莓派常见: "/dev/ttyUSB0" 或 "/dev/ttyAMA0"
+  port: "/dev/ttyAMA0"   # 原值: "COM10"；树莓派常见: "/dev/ttyUSB0" 或 "/dev/ttyAMA0"
   baudrate: 115200
   timeout: 1.0          # Serial.read 超时（秒）
 
@@ -26,7 +26,7 @@ dector :
   conf_threshold : 0.60 # 置信度阈值
   target_classes : [0 , 1 , 2]   # 需要检测的类别
 
-  show_window : true # 进行显示
+  show_window : false # 原值: true；树莓派无桌面环境建议关闭显示
 
   backend: "process"      # onnx\process\ncnn 
 
@@ -50,8 +50,9 @@ dector :
     same_obj_iou_th: 0          # IoU 大于该值认为同一个目标
 
   process:
-    exec_path: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
+    exec_path: "detector_cpp/build/Release/detector_ncnn" # 原值: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
     args: []
+    opencv_bin: ""           # Windows 可选，若设置则自动加入 PATH
   
 # fsm相关
 fsm:
@@ -71,11 +72,13 @@ fsm:
   patrol_wz_freq : 0.8
   
 uploader : 
-  enable : true
-  endpoint : "https://"             # 目标网站
+  enable : false                     # 原值: true；未配置真实 endpoint 前建议关闭
+  endpoint : ""                     # 原值: "https://"；上线前替换为真实上传地址
   zip_root : "data"                 # 默认打包根目录
   zip_output_dir : "zips"           # zip 输出目录
   marker_suffix : "uploaded"        # 上传使用
+  timeout_s: 30
+  retry_s: 5
   zip_enable: true
   zip_marker_suffix: ".zipped"      # 打包使用
   zip_include_patterns: null

@@ -125,7 +125,7 @@ ProcessDetector
 
 ### 2. 工作机制
 
-* 启动 `detector_ncnn.exe`（或你自定义的检测可执行程序）
+* 启动 `detector_ncnn.exe`（Windows）或 `detector_ncnn`（Linux / Pi）
 * 调用：
 
   ```
@@ -145,6 +145,8 @@ ProcessDetector
 
 > 说明：`detector_ncnn.exe` 通常需要 `--param/--bin/...` 参数。
 > 若仅做“进程拉起/退出链路”联调，可替换为 `detector_stub` 或在脚本中补全参数。
+
+> Linux / Pi 场景通常使用无后缀可执行文件：`detector_ncnn`。
 
 ---
 
@@ -168,4 +170,48 @@ python tool/mock_COM11.py
 
 ```
 python tool/mock_COM11_plus.py
+```
+
+---
+
+# 五、Pi 实机最小联调顺序
+
+建议在树莓派上按“先单模块，再整机”方式联调：
+
+### 1️⃣ 检测进程联调
+
+```
+python tool/test_process_detector.py
+```
+
+期望：持续读到 `[ NCNN ]{...}`。
+
+### 2️⃣ 串口/GPS 联调
+
+```
+python -m src.main
+```
+
+期望：UART 可发送命令、GPS 状态持续更新。
+
+### 3️⃣ 巡逻闭环联调
+
+确认 Patrol/FSM 日志稳定后，再开启完整任务。
+
+---
+
+# 六、systemd 配合调试
+
+当项目配置为服务运行后，建议优先使用以下命令排障：
+
+```bash
+systemctl status patrol.service
+journalctl -u patrol.service -f
+```
+
+若配置变更后未生效：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart patrol.service
 ```

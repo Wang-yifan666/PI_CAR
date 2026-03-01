@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import src.global_ctx as ctx
 from src.utils.logger import sys_logger as logger, log_event
-from src.services.uploader import build_zip_for_data
+from src.services.uploader import build_zip_for_data, enqueue_upload
 
 # 返回时间戳
 def _now_ts() -> float :
@@ -243,6 +243,13 @@ class FSMService(threading.Thread) :
             try:
                 zip_path = build_zip_for_data(meta=meta or {})
                 log_event(logger, source="ZIP", event="pack", result="ok", key={"path": zip_path}, brief=False)
+
+                try:
+                    ucfg = (ctx.config or {}).get("uploader", {}) if hasattr(ctx, "config") else {}
+                    if bool(ucfg.get("enable", False)):
+                        enqueue_upload(zip_path, meta=meta or {})
+                except Exception as e:
+                    log_event(logger, source="UPLOAD", event="enqueue", result="fail", reason=str(e), key={"zip": zip_path}, level=logging.WARNING)
             except Exception as e:
                 log_event(logger, source="ZIP", event="pack", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             finally:
