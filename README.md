@@ -208,10 +208,21 @@ pip install -r requirements-pi.txt
 
 # 配置说明（settings_cpp.yaml / settings.yaml）
 
-程序启动时会优先读取：
+程序启动时会按平台读取：
 
-1. `config/settings_cpp.yaml`
-2. `config/settings.yaml`
+1. Linux / 树莓派：`config/settings.yaml` → `config/settings_cpp.yaml`
+2. Windows / PC：`config/settings_cpp.yaml` → `config/settings.yaml`
+
+也可通过环境变量强制指定：
+
+```bash
+PICAR_CONFIG=config/settings.yaml
+```
+
+两份配置建议分工：
+
+* `config/settings.yaml`：Linux / Pi 实车运行主配置
+* `config/settings_cpp.yaml`：Windows / PC 调试与回放配置
 
 系统配置主要模块包括：
 
@@ -228,6 +239,49 @@ pip install -r requirements-pi.txt
 docs/settings.md
 ```
 
+> 建议：实车部署时使用 `settings.yaml` 作为主配置，`settings_cpp.yaml` 保留给 PC 调试。
+
+---
+
+# 树莓派部署最小闭环（process + ncnn + CSI）
+
+建议在 Pi 上按以下顺序执行：
+
+1 前置检查（无桌面环境同样适用）
+
+```bash
+cat /etc/os-release
+getconf LONG_BIT
+libcamera-hello --list-cameras
+```
+
+2 安装依赖并创建虚拟环境
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip cmake build-essential pkg-config libopencv-dev libcamera-dev python3-picamera2
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements-pi.txt
+```
+
+3 构建 C++ 检测器（在 Pi 本地）
+
+```bash
+cmake -S detector_cpp -B detector_cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build detector_cpp/build -j
+```
+
+4 先测检测子进程，再启动主程序
+
+```bash
+python tool/test_process_detector.py
+python -m src.main
+```
+
+> 期望结果：`tool/test_process_detector.py` 能持续读取 `[ NCNN ]{...}`，主程序可进入巡逻/检测主循环。
+
 ---
 
 # NCNN 检测链路说明
@@ -237,16 +291,19 @@ docs/settings.md
 ```text
 DECTOR_ser (backend=process)
   -> ProcessDetector
-  -> detector_cpp/build/Release/detector_ncnn.exe
+  -> detector_cpp/build/Release/detector_ncnn(.exe)
 ```
 
-`detector_ncnn.exe` 通过标准输出持续输出：
+`detector_ncnn(.exe)` 通过标准输出持续输出：
 
 ```text
 [ NCNN ]{...json...}
 ```
 
 Python 侧会解析 JSON 并投递到 `ctx.dector_queue`，供 FSM 决策使用。
+
+> Linux / Pi 环境请使用 `detector_cpp/build/Release/detector_ncnn`。
+> Windows 环境使用 `detector_cpp/build/Release/detector_ncnn.exe`。
 
 ---
 
@@ -270,6 +327,22 @@ detector_cpp/build/Release/detector_ncnn.exe
 models/ncnn/
 models/classes.txt
 ```
+
+---
+
+# systemd 服务化（树莓派）
+
+建议将主程序配置为系统服务，以支持断电重启后自动拉起：
+
+```bash
+sudo cp deploy/patrol.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now patrol.service
+systemctl status patrol.service
+journalctl -u patrol.service -f
+```
+
+> 注意：`deploy/patrol.service` 需按你的 Pi 路径与运行用户配置 `WorkingDirectory` / `ExecStart`。
 
 ---
 

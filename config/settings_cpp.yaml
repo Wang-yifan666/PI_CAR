@@ -1,16 +1,19 @@
 # config/settings_cpp.yaml
 
+# 说明：本文件用于 PC 调试链路。
+# 实车（Linux / Pi）请优先使用 config/settings.yaml。
+
 dector:
   enable: true
   backend: process
   process:
-    exec_path: detector_cpp/build/Release/detector_ncnn.exe
+    exec_path: detector_cpp/build/Release/detector_ncnn.exe  # 原值: detector_cpp/build/Release/detector_ncnn.exe（PC 调试默认）
     args:
       - --param=models/ncnn/best.ncnn.param
       - --bin=models/ncnn/best.ncnn.bin
       - --classes=models/classes.txt
-      - --source=video:data/test.mp4
-      # - --source=camera:0
+      - --source=video:data/test.mp4  # 原值: video:data/test.mp4（PC 视频回放默认）
+      # - --source=camera:0           # 实车可改为 camera:0
       - --imgsz=640
       - --threads=4
       - --conf=0.8
@@ -24,11 +27,11 @@ fsm:
 
 # PC先关掉硬件相关线程，避免卡启动
 uart:
-  enable: false
+  enable: false  # 原值: false（PC 调试默认）
 gps:
-  enable: false
+  enable: false  # 原值: false（PC 调试默认）
 patrol:
-  enable: false
+  enable: false  # 原值: false（PC 调试默认）
 
 # 下面是测试命令，实际运行直接在命令行里运行
 # .\detector_cpp\build\Release\detector_ncnn.exe --param=models/ncnn/best.ncnn.param --bin=models/ncnn/best.ncnn.bin --classes=models/classes.txt --source=video:data/test.mp4 --imgsz=640 --threads=4 --conf=0.8 --out=out0 --nms=0.45 --debug=0 --topk=20 | Select-Object -First 5

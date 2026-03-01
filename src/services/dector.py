@@ -601,28 +601,69 @@ class DECTOR_ser( threading.Thread ):
                             break 
                         continue
                     
-                    dets = msg.get("detections", []) or []
-                    if not dets : 
-                        continue 
-                    
-                    d = dets[0]
-                    ev = {
-                        "type": "detection",
-                        "class_id": int(d.get("class_id", -1)),
-                        "class_name": str(d.get("cls", "")),
-                        "conf": float(d.get("conf", 0.0)),
-                        "bbox_xyxy": d.get("xyxy", None),
-                        "ts": float(msg.get("ts", 0.0)),   # 没有 ts 则 fallback 0
-                        "saved_image": msg.get("saved_image", ""),
-                    }
+                    dets_raw = msg.get("detections", []) or []
+                    if not dets_raw:
+                        continue
 
+                    W = msg.get("w", msg.get("img_w", 640))
+                    H = msg.get("h", msg.get("img_h", 640))
+
+                    dets = []
+                    for d in dets_raw:
+                        bbox = d.get("xyxy") or d.get("bbox_xyxy") or d.get("bbox")
+                        if not bbox or len(bbox) < 4:
+                            continue
+
+                        x1, y1, x2, y2 = map(float, bbox[:4])
+                        x1_i, y1_i, x2_i, y2_i = int(x1), int(y1), int(x2), int(y2)
+                        area = max(0, x2_i - x1_i) * max(0, y2_i - y1_i)
+                        cx = int((x1_i + x2_i) / 2)
+                        cy = int((y1_i + y2_i) / 2)
+
+                        dets.append({
+                            "type": "detection",
+                            "class_id": int(d.get("class_id", -1)),
+                            "class_name": d.get("cls", d.get("class_name", "")),
+                            "conf": float(d.get("conf", 0.0)),
+                            "bbox_xyxy": [x1_i, y1_i, x2_i, y2_i],
+                            "center": [cx, cy],
+                            "area": int(area),
+                            "img_size": [int(W), int(H)],
+                            "ts": float(msg.get("ts", time.time())),
+                        })
+
+                    if not dets:
+                        continue
+
+                    violation_ev = self._check_violation_ebike_strip(dets, W, H)
+
+                    # 违规优先：让 FSM 抢占控制权
+                    if violation_ev is not None:
+                        saved_image = msg.get("saved_image")
+                        if saved_image:
+                            violation_ev.setdefault("artifacts", {})["saved_image"] = saved_image
+
+                        try:
+                            if hasattr(ctx, "put_latest"):
+                                ctx.put_latest(ctx.dector_queue, violation_ev)
+                            else:
+                                if ctx.dector_queue.full():
+                                    ctx.dector_queue.get_nowait()
+                                ctx.dector_queue.put_nowait(violation_ev)
+                        except Exception as e:
+                            log_event(self.logger, source="DETECT", event="process_output", action="queue_put", result="fail", reason="queue_put", key={"err": str(e)}, level=logging.WARNING, brief=False)
+                        continue
+
+                    # 否则上报本帧最优检测（面积优先，其次置信度）
+                    dets.sort(key=lambda d: (d.get("area", 0), d.get("conf", 0.0)), reverse=True)
+                    best = dets[0]
                     try:
-                        if hasattr(ctx , "put_latest") :
-                            ctx.put_latest(ctx.dector_queue , ev)
+                        if hasattr(ctx, "put_latest"):
+                            ctx.put_latest(ctx.dector_queue, best)
                         else:
-                            if ctx.dector_queue.full() :
+                            if ctx.dector_queue.full():
                                 ctx.dector_queue.get_nowait()
-                            ctx.dector_queue.put_nowait(ev)
+                            ctx.dector_queue.put_nowait(best)
                     except Exception as e:
                         log_event(self.logger, source="DETECT", event="process_output", action="queue_put", result="fail", reason="queue_put", key={"err": str(e)}, level=logging.WARNING, brief=False)
 

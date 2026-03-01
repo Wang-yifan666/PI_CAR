@@ -6,6 +6,10 @@ import zipfile
 import hashlib
 import fnmatch
 import logging
+import threading
+import queue
+
+import requests
 
 from datetime import datetime
 from typing import Dict, Optional, List, Iterable, Tuple
@@ -235,3 +239,116 @@ def build_zip_for_data(task_id: Optional[str] = None,
         task_id = f"DATA_{_now_time()}"
     task = zips(root_path="data", task_id=task_id, meta=meta or {})
     return build_zip(task, **kwargs)
+
+
+# 将 zip 任务入队等待上传
+def enqueue_upload(zip_path: str, meta: Optional[Dict[str, str]] = None) -> bool:
+    payload = {
+        "zip_path": zip_path,
+        "meta": meta or {},
+        "ts": time.time(),
+    }
+
+    try:
+        if hasattr(ctx, "put_latest"):
+            ok = ctx.put_latest(ctx.upload_queue, payload)
+            if not ok:
+                return False
+        else:
+            if ctx.upload_queue.full():
+                ctx.upload_queue.get_nowait()
+            ctx.upload_queue.put_nowait(payload)
+
+        log_event(logger, source="UPLOAD", event="enqueue", result="ok", key={"zip": zip_path}, level=logging.DEBUG)
+        return True
+    except Exception as e:
+        log_event(logger, source="UPLOAD", event="enqueue", result="fail", reason=str(e), key={"zip": zip_path}, level=logging.ERROR)
+        return False
+
+
+class UploadService(threading.Thread):
+    def __init__(self, cfg: Optional[Dict[str, object]] = None):
+        super().__init__()
+        self.daemon = True
+        self.cfg = cfg or {}
+        self.ucfg = (self.cfg or {}).get("uploader", {}) or {}
+
+        self.enable = bool(self.ucfg.get("enable", False))
+        self.endpoint = str(self.ucfg.get("endpoint", "")).strip()
+        self.timeout_s = float(self.ucfg.get("timeout_s", self.ucfg.get("timeout", 30)))
+        self.retry_s = float(self.ucfg.get("retry_s", 5))
+        self.marker_suffix = str(self.ucfg.get("marker_suffix", "uploaded"))
+
+    def _marker_path(self, zip_path: str) -> str:
+        suffix = self.marker_suffix or "uploaded"
+        if suffix.startswith("."):
+            return f"{zip_path}{suffix}"
+        return f"{zip_path}.{suffix}"
+
+    def _write_marker(self, zip_path: str) -> None:
+        marker = self._marker_path(zip_path)
+        try:
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+            log_event(logger, source="UPLOAD", event="marker", result="ok", key={"marker": marker}, level=logging.DEBUG)
+        except Exception as e:
+            log_event(logger, source="UPLOAD", event="marker", result="fail", reason=str(e), key={"marker": marker}, level=logging.ERROR)
+
+    def _requeue(self, item: dict) -> None:
+        try:
+            if hasattr(ctx, "put_latest"):
+                ctx.put_latest(ctx.upload_queue, item)
+            else:
+                if ctx.upload_queue.full():
+                    ctx.upload_queue.get_nowait()
+                ctx.upload_queue.put_nowait(item)
+        except Exception:
+            pass
+
+    def run(self) -> None:
+        if not self.enable:
+            log_event(logger, source="UPLOAD", event="start", result="skip", reason="disabled", level=logging.WARNING, brief=False)
+            return
+        if not self.endpoint:
+            log_event(logger, source="UPLOAD", event="start", result="skip", reason="empty_endpoint", level=logging.ERROR, brief=False)
+            return
+
+        log_event(logger, source="UPLOAD", event="start", result="ok", key={"endpoint": self.endpoint}, brief=False)
+
+        while not ctx.system_stop_event.is_set():
+            try:
+                item = ctx.upload_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if not item:
+                continue
+
+            zip_path = item.get("zip_path") if isinstance(item, dict) else None
+            meta = item.get("meta") if isinstance(item, dict) else {}
+            if not zip_path or (not os.path.exists(zip_path)):
+                log_event(logger, source="UPLOAD", event="upload", result="skip", reason="missing_zip", key={"zip": zip_path}, level=logging.WARNING)
+                continue
+
+            marker = self._marker_path(zip_path)
+            if os.path.exists(marker):
+                log_event(logger, source="UPLOAD", event="upload", result="skip", reason="marker_exists", key={"marker": marker}, level=logging.DEBUG)
+                continue
+
+            try:
+                with open(zip_path, "rb") as f:
+                    files = {"file": (os.path.basename(zip_path), f, "application/zip")}
+                    resp = requests.post(self.endpoint, files=files, data=meta or {}, timeout=self.timeout_s)
+
+                if resp.ok:
+                    self._write_marker(zip_path)
+                    log_event(logger, source="UPLOAD", event="upload", result="ok", key={"zip": zip_path, "status": resp.status_code}, brief=True)
+                else:
+                    log_event(logger, source="UPLOAD", event="upload", result="fail", reason=f"status_{resp.status_code}", key={"zip": zip_path}, level=logging.WARNING)
+                    self._requeue(item)
+                    time.sleep(self.retry_s)
+
+            except Exception as e:
+                log_event(logger, source="UPLOAD", event="upload", result="fail", reason=str(e), key={"zip": zip_path}, level=logging.ERROR)
+                self._requeue(item)
+                time.sleep(self.retry_s)

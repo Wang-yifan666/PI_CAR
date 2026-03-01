@@ -7,6 +7,8 @@ import time
 import os
 from typing import Optional , Any , Dict , List
 
+import src.global_ctx as ctx
+
 from src.utils.logger import sys_logger as logger, log_event
 
 
@@ -27,8 +29,16 @@ class ProcessDetector :
         self._log_event(event="process_launch", result="start", key={"exec": self.exec_path, "args": self.args})
         
         env = os.environ.copy()            # 复制当前环境变量，使opencv的DLL能够被找到
-        opencv_bin = r"D:\\opencv\\opencv_4.12\\build\\x64\\vc16\\bin"
-        env["PATH"] = opencv_bin + os.pathsep + env.get("PATH", "")
+
+        # 可选：从配置中注入 OpenCV 的 bin 目录，避免硬编码
+        opencv_bin = None
+        try:
+            opencv_bin = (ctx.config or {}).get("dector", {}).get("process", {}).get("opencv_bin")
+        except Exception:
+            opencv_bin = None
+
+        if opencv_bin and os.path.isdir(opencv_bin):
+            env["PATH"] = opencv_bin + os.pathsep + env.get("PATH", "")
 
         self.proc = subprocess.Popen(
             cmd,

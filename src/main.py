@@ -17,18 +17,39 @@ from src.drivers.uart import STM32Communicator
 from src.services.gps_service import GPSService
 from src.core.patrol_logic import PatrolService
 from src.core.fsm import FSMService
+from src.services.uploader import UploadService
 
 from src.utils.logger import sys_logger as logger, configure_logging, log_event
 
-# 读取配置文件，先读settings_cpp.yaml，读不到再读settings.yaml
-def load_config() :  
+# 读取配置文件：
+# - Linux/Pi 默认优先 settings.yaml（实车配置）
+# - Windows 默认优先 settings_cpp.yaml（PC 调试配置）
+# - 可用环境变量 PICAR_CONFIG 强制指定
+def load_config(prefer_pi: bool = False) :  
     try:
         base_dir = os.path.dirname( os.path.abspath(__file__) )
+        project_dir = os.path.abspath(os.path.join(base_dir, ".."))
 
-        yaml_candidates = [
-            os.path.join(base_dir, '../config/settings_cpp.yaml'),
-            os.path.join(base_dir, '../config/settings.yaml'),
-        ]
+        env_cfg = str(os.environ.get("PICAR_CONFIG", "")).strip()
+        yaml_candidates = []
+
+        if env_cfg:
+            if os.path.isabs(env_cfg):
+                yaml_candidates = [env_cfg]
+            else:
+                yaml_candidates = [os.path.join(project_dir, env_cfg)]
+        else:
+            if prefer_pi:
+                yaml_candidates = [
+                    os.path.join(base_dir, '../config/settings.yaml'),
+                    os.path.join(base_dir, '../config/settings_cpp.yaml'),
+                ]
+            else:
+                yaml_candidates = [
+                    os.path.join(base_dir, '../config/settings_cpp.yaml'),
+                    os.path.join(base_dir, '../config/settings.yaml'),
+                ]
+
 
         yaml_path = None
         for p in yaml_candidates:
@@ -43,7 +64,12 @@ def load_config() :
             ctx.config = yaml.safe_load(f) or {}
 
         log_event(logger, source="INIT", event="config_load", result="ok",
-                  reason=os.path.basename(yaml_path), brief=False)
+                  reason=os.path.basename(yaml_path),
+                  key={
+                      "prefer_pi": bool(prefer_pi),
+                      "env_override": bool(env_cfg),
+                  },
+                  brief=False)
         return True
     except Exception as e:
         log_event(logger, source="INIT", event="config_load", result="fail",
@@ -157,7 +183,9 @@ def main() :
 
     log_event(logger, source="INIT", event="startup", result="begin", brief=None)
 
-    if not load_config() :
+    prefer_pi_config = bool(is_pi or sys.platform.startswith("linux"))
+
+    if not load_config(prefer_pi=prefer_pi_config) :
         return
 
     # 初始化 UART
@@ -231,6 +259,18 @@ def main() :
     # 创建监视和大脑线程
     dector_thread = DECTOR_ser()
     fsm_thread = FSMService()
+
+    # 上传线程（可选）
+    upload_cfg = ctx.config.get("uploader", {}) if hasattr(ctx, "config") else {}
+    upload_enable = bool(upload_cfg.get("enable", False))
+    upload_thread = None
+    if upload_enable:
+        try:
+            upload_thread = UploadService(ctx.config)
+            upload_thread.start()
+            log_event(logger, source="UPLOAD", event="thread_spawn", action="start", result="ok", key={"endpoint": upload_cfg.get("endpoint", "")}, level=logging.DEBUG, brief=False)
+        except Exception as e:
+            log_event(logger, source="UPLOAD", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
 
     # 启动线程
     log_event(logger, source="INIT", event="threads", action="start_bar", result="ok", brief=False)

@@ -6,12 +6,17 @@
 
 # 配置加载优先级
 
-主程序 `src/main.py` 启动时按以下顺序加载：
+主程序 `src/main.py` 启动时按平台加载：
 
-1. `config/settings_cpp.yaml`
-2. `config/settings.yaml`
+1. Linux / 树莓派：`config/settings.yaml` → `config/settings_cpp.yaml`
+2. Windows / PC：`config/settings_cpp.yaml` → `config/settings.yaml`
 
-即：若 `settings_cpp.yaml` 存在且非空，则优先使用它。
+也可通过环境变量 `PICAR_CONFIG` 强制指定配置文件路径（支持相对项目根目录路径或绝对路径）。
+
+推荐分工：
+
+* `config/settings.yaml`：Linux / 树莓派实车主配置
+* `config/settings_cpp.yaml`：Windows / PC 调试配置（视频回放、硬件线程可关闭）
 
 ---
 
@@ -109,6 +114,7 @@ process:
 | --------- | ------- |
 | exec_path | 可执行文件路径 |
 | args      | 启动参数    |
+| opencv_bin | （可选）OpenCV bin 目录，Windows 用于补充 PATH |
 
 常见配置示例（对应当前仓库）：
 
@@ -131,6 +137,29 @@ dector:
 			- --topk=20
 ```
 
+树莓派常见配置示例（process + ncnn + CSI）：
+
+```yaml
+dector:
+  backend: process
+  process:
+    exec_path: detector_cpp/build/Release/detector_ncnn
+    args:
+      - --param=models/ncnn/best.ncnn.param
+      - --bin=models/ncnn/best.ncnn.bin
+      - --classes=models/classes.txt
+      - --source=camera:0
+      - --imgsz=640
+      - --threads=4
+      - --conf=0.8
+      - --nms=0.45
+      - --out=out0
+      - --debug=0
+      - --topk=20
+```
+
+> 说明：Windows 常见可执行文件为 `.exe`，Linux / Pi 常见为无后缀可执行文件。
+
 ---
 
 # 3. FSM 状态机配置
@@ -143,11 +172,14 @@ fsm:
 
 | 参数                 | 说明       |
 | ------------------ | -------- |
-| rate_hz            | FSM 运行频率 |
-| lost_timeout_s     | 目标丢失判定时间 |
-| target_class_names | 允许追踪的类别  |
+| hold_after_lost_s  | 违规事件消失后保持抢占的时间 |
+| patrol_stale_s     | 巡逻建议过期时间 |
+| cmd_dedup_s        | 相同命令去重时间窗口 |
+| violation_cmd      | 违规时下发命令 |
+| log_every_s        | FSM 状态日志节流 |
 | stop_cmd           | 停止命令     |
-| desired_area_norm  | 目标理想面积比例 |
+
+> 当前实现以“违规抢占 > 巡逻建议 > 停止”进行仲裁。
 
 ---
 
@@ -155,9 +187,11 @@ fsm:
 
 | 参数             | 说明      |
 | -------------- | ------- |
-| patrol_vx      | 巡逻前进速度  |
-| patrol_wz      | 巡逻角速度   |
-| patrol_wz_freq | 角速度变化频率 |
+| turn_rate_dps  | 转向角速度估计（用于 TURN 结束等待） |
+| heading_update_min_move_m | 只有位移超过阈值才更新航向，抑制 GPS 抖动 |
+| log_every_s    | Patrol 日志节流 |
+
+> `patrol_vx / patrol_wz / patrol_wz_freq` 为历史参数，当前 patrol 逻辑不直接读取。
 
 ---
 
@@ -173,13 +207,22 @@ uploader:
 | -------------------- | -------- |
 | enable               | 是否启用上传   |
 | endpoint             | 服务器地址    |
+| timeout_s            | 上传超时时间（秒） |
+| retry_s              | 失败重试间隔（秒） |
 | zip_root             | 打包根目录    |
 | zip_output_dir       | zip 输出目录 |
-| marker_suffix        | 上传标记     |
+| marker_suffix        | 上传标记（写入 zip_path.marker_suffix） |
 | zip_enable           | 是否启用打包   |
 | zip_marker_suffix    | 打包标记     |
 | zip_include_patterns | 包含文件模式   |
 | zip_exclude_dirs     | 排除目录     |
+
+建议：若 `endpoint` 尚未配置真实服务地址，可先将 `enable` 设为 `false`，避免持续重试刷日志。
+
+标记说明：
+
+* `zip_marker_suffix`（默认 `.zipped`）表示“已完成打包”
+* `marker_suffix`（默认 `uploaded`）表示“已完成上传”
 
 ---
 
