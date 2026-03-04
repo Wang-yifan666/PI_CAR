@@ -207,6 +207,10 @@ int main( int argc , char** argv )
         ncnn::Mat in = ncnn::Mat::from_pixels_resize(
             frame.data, ncnn::Mat::PIXEL_BGR, img_w, img_h, imgsz, imgsz ) ;
 
+        // 归一化到 [0,1]
+        const float norm_vals[3] = {1/255.f, 1/255.f, 1/255.f};
+        in.substract_mean_normalize(nullptr, norm_vals);
+
         ncnn::Extractor ex = net.create_extractor();
         ex.input("in0", in);  
 
@@ -222,7 +226,7 @@ int main( int argc , char** argv )
                       << ",\"img_h\":" << img_h
                       << ",\"type\":\"detection\",\"detections\":[]}\n" ;
             std::cout.flush() ;
-            frame_id++ ;
+            frame_id ++ ;
             continue ;
         }
 
@@ -281,15 +285,24 @@ int main( int argc , char** argv )
 
             float score = obj * cls_best ;
 
-            if (score < conf_thres)
+            if ( score < conf_thres )
                 continue;
 
+            if ( debug ) 
+            {
+                std::cerr << "row" << i
+                          << " obj=" << obj
+                          << " cls_best=" << cls_best
+                          << " score=" << score
+                          << " cid=" << cid
+                          << "\n";
+            }
+            
             // cxcywh -> xyxy (on imgsz scale)
             float x1 = cx - bw * 0.5f ;
             float y1 = cy - bh * 0.5f ;
             float x2 = cx + bw * 0.5f ;
             float y2 = cy + bh * 0.5f ;
-
         
             if (x1 > x2) 
                 std::swap(x1, x2) ;
@@ -306,8 +319,8 @@ int main( int argc , char** argv )
             y1 = clampf(y1, 0.f, img_h - 1.f) ;
             y2 = clampf(y2, 0.f, img_h - 1.f) ;
         
-            // 去掉极小框
-            if ((x2 - x1) < 2.f || (y2 - y1) < 2.f)
+            // 去掉小框
+            if ( (x2 - x1) < 2.f || (y2 - y1) < 2.f )
                 continue ;
         
             cand.push_back(Det{cid, score, x1, y1, x2, y2}) ;
