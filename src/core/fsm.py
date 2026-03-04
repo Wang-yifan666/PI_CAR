@@ -53,6 +53,12 @@ class FSMService(threading.Thread) :
         # 缓存最新的patrol建议
         self._patrol_cached_cmd: str = ""
         self._patrol_cached_ts: float = 0.0
+        
+        # 关于火警的检测
+        self.fire_enable: bool = bool(cfg.get("fire_enable", False))
+        self.fire_cls: int = int(cfg.get("fire_cls" , 1)) # 默认火警类别ID为1
+        self.fire_conf_threshold: float = float(cfg.get("fire_conf_threshold", 0.5))
+        self.fire_founded: bool = False                   # 发现火警后保持状态，只有人员取消才重置
 
         log_event(
             logger,
