@@ -41,6 +41,7 @@
 *  NCNN 外部进程检测（主链路）
 *  ONNX 内置推理（兼容保留）
 *  自动抓拍违规证据
+*  火灾识别触发 FIRE_RETURN 返航
 *  GPS 定位记录
 *  回巢自动打包上传
 *  支持 PC 仿真闭环测试
@@ -156,17 +157,17 @@ P0 → P1 → P2 → ... → PN
 
 ## 状态流程
 
-### 1️⃣ TURN 阶段
+### 1 TURN 阶段
 
 * 计算目标方向
 * 一次性发送旋转指令（L0xxx / R0xxx）
 
-### 2️⃣ GO 阶段
+### 2 GO 阶段
 
 * 小步长前进（Fxxxx）
 * 周期性检查偏航
 
-### 3️⃣ 到点判定
+### 3 到点判定
 
 * 球面距离 < arrive_radius_m
 
@@ -174,14 +175,14 @@ P0 → P1 → P2 → ... → PN
 
 # 快速开始
 
-## 1️⃣ 克隆项目
+## 1 克隆项目
 
 ```bash
 git clone https://github.com/Wang-yifan666/PI_CAR.git
 cd PI_CAR
 ```
 
-## 2️⃣ 创建虚拟环境
+## 2 创建虚拟环境
 
 ```bash
 python3 -m venv venv
@@ -190,7 +191,7 @@ source venv/bin/activate
 
 ---
 
-## 3️⃣ 安装依赖
+## 3 安装依赖
 
 ### PC 调试环境
 

@@ -55,10 +55,20 @@ class FSMService(threading.Thread) :
         self._patrol_cached_ts: float = 0.0
         
         # 关于火警的检测
-        self.fire_enable: bool = bool(cfg.get("fire_enable", False))
-        self.fire_cls: int = int(cfg.get("fire_cls" , 1)) # 默认火警类别ID为1
-        self.fire_conf_threshold: float = float(cfg.get("fire_conf_threshold", 0.5))
-        self.fire_founded: bool = False                   # 发现火警后保持状态，只有人员取消才重置
+        self.fire_enable: bool = bool(cfg.get("fire_enable", True))
+        self.fire_cls: int = int(                         # 默认火警类别ID为1
+            cfg.get(
+                "fire_cls",
+                ((ctx.config or {}).get("dector", {}).get("violation", {}).get("fire_class_id", 1))
+            )
+        ) 
+        self.fire_conf_threshold: float = float(
+            cfg.get(
+                "fire_conf_threshold",
+                ((ctx.config or {}).get("dector", {}).get("conf_threshold", 0.5))
+            )
+        )
+        self.fire_founded: bool = False
 
         log_event(
             logger,
@@ -86,6 +96,28 @@ class FSMService(threading.Thread) :
 
         # 默认：不因为 detection 或 fake 占用控制权
         return False  
+    
+    # 判定是否触发火警
+    def _event_is_fire(self , ev : dict) -> bool :
+        if ( not self.fire_enable ) or ( not ev ) or ( not isinstance(ev, dict) ) :
+            return False
+
+        try:
+            cls_id = int( ev.get("class_id" , -1) )
+        except Exception :
+            cls_id = -1
+
+        try:
+            conf = float( ev.get("conf" , 0.0) )
+        except Exception:
+            conf = 0.0
+
+        ev_type = str( ev.get("type" , "") )
+
+        if ev_type == "fire":
+            return conf >= self.fire_conf_threshold
+
+        return (cls_id == self.fire_cls) and (conf >= self.fire_conf_threshold)        
     
     # 向uart发消息
     def _emit_uart(self , cmd : str , reason : str ) :
@@ -213,7 +245,22 @@ class FSMService(threading.Thread) :
         while not ctx.system_stop_event.is_set():
             # 读dector
             ev = self._poll_dector_event()
-            if self._event_has_target(ev):
+
+            if self._event_is_fire(ev):
+                if not self.fire_founded:
+                    self.fire_founded = True
+                    try:       # 触发火警后，直接返回基地
+                        if hasattr(ctx, "set_mission"):
+                            ctx.set_mission(
+                                mode="FIRE_RETURN",
+                                return_to_base=True,
+                                fire_found_ts=_now_ts(),
+                            )
+                    except Exception:
+                        pass
+
+
+            elif self._event_has_target(ev):
                 self._last_violation_ts = _now_ts()
 
             # 读patrol建议

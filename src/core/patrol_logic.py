@@ -82,6 +82,10 @@ class PatrolService(threading.Thread) :
         self._last_at_base = False
         self._has_departed_base = False
         
+        self._return_to_base = False
+        self._return_dir = 0          # 0: 未决定, 1: 正向, -1: 反向
+        self._last_wp_idx = 0         # 上一个已到达的航点
+        
         # 状态：TURN/GO
         self.state = "TURN"
 
@@ -156,7 +160,46 @@ class PatrolService(threading.Thread) :
                 self.idx = 0 
             else :
                 self.idx = len(self.waypoints)
-                
+    
+    # 根据step步进idx，考虑loop
+    def _step_waypoint(self , idx : int , step : int ) -> int :
+        n = len( self.waypoints )
+        
+        if n <= 0 :
+            return idx 
+        
+        idx += step 
+        if self.loop :
+            idx = idx % n
+        else :
+            idx = max( 0 , min( n - 1 , idx ) )
+            
+        return idx
+    
+    # 计算两个航点之间的距离
+    def _edge_dist_m(self, i: int, j: int) -> float:
+        p1 = self.waypoints[i]
+        p2 = self.waypoints[j]
+        return _haversine_m(float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]))
+    
+    # 计算路径到基地的距离
+    def _path_dist_to_base(self, start_idx: int, step: int, base_idx: int = 0) -> float:
+        if start_idx == base_idx:
+            return 0.0
+
+        total = 0.0
+        cur = start_idx
+        n = len(self.waypoints)
+
+        for _ in range(n + 1):
+            nxt = self._step_waypoint(cur, step)
+            total += self._edge_dist_m(cur, nxt)
+            cur = nxt
+            if cur == base_idx:
+                return total
+
+        return float("inf")
+                    
     # 运行
     def run(self) :
         if not self.enable:
@@ -183,6 +226,21 @@ class PatrolService(threading.Thread) :
             lat = gs.get("lat", None)
             lon = gs.get("lon", None)
             ts = float(gs.get("ts", time.time()))
+            
+            ms = ctx.get_mission_copy() if hasattr( ctx , "get_mission_copy" ) else {}
+            return_to_base = bool(ms.get( "return_to_base", False ))
+            
+            if return_to_base and ( not self._return_to_base ) :
+                self._return_to_base = True 
+                self._return_dir = 0 
+                log_event(
+                    logger,
+                    source="PATROL",
+                    event="mode",
+                    action="return_to_base",
+                    key={"wp_idx": self.idx},
+                    brief=False,
+                )                
             
             if ( not ok ) or ( lat is None ) or ( lon is None ) : 
                 time.sleep(0.2)
@@ -240,13 +298,56 @@ class PatrolService(threading.Thread) :
                 )                 
                 
             # 到点,切换下一点，并进入TURN
-            if dist <= self.arrive_radius_m:
-                log_event(logger, source="PATROL", event="reached_wp", key={"wp_idx": self.idx, "dist": round(dist,2)}, brief=False)
+            if dist <= self.arrive_radius_m :
+                log_event(
+                    logger,
+                    source="PATROL",
+                    event="reached_wp",
+                    key={"wp_idx": self.idx, "dist": round(dist, 2)},
+                    brief=False,
+                )
+
+                self._last_wp_idx = self.idx
+
+                # 发现了火灾，计算距离，直接返回基地
+                if self._return_to_base : 
+                    if self.idx == 0:
+                        self._emit_gps("S")
+                        time.sleep(0.2)
+                        continue
+
+                    if self._return_dir == 0 :
+                        forward_dist = self._path_dist_to_base(self.idx, 1, 0)
+                        backward_dist = self._path_dist_to_base(self.idx, -1, 0)
+
+                        if forward_dist <= backward_dist :
+                            self._return_dir = 1
+                        else:
+                            self._return_dir = -1
+
+                        log_event(
+                            logger,
+                            source="PATROL",
+                            event="return_route",
+                            key={
+                                "wp_idx": self.idx,
+                                "forward_m": round( forward_dist , 2 ),
+                                "backward_m": round( backward_dist , 2 ),
+                                "dir": self._return_dir,
+                            },
+                            brief=False,
+                        )
+
+                    self.idx = self._step_waypoint( self.idx , self._return_dir )
+                    self.state = "TURN"
+                    time.sleep(0.2)
+                    continue
+
                 self._next_waypoint()
-                self.state = "TURN"                        
+                self.state = "TURN"
                 time.sleep(0.2)
-                continue     
-            
+                continue
+
             # 刚启动或还没移动够，再走一步让航向可估计
             if self._heading_deg is None:
                 self._emit_gps(f"F{self.forward_sec:04d}")

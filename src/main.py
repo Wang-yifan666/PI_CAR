@@ -25,6 +25,24 @@ from src.utils.logger import sys_logger as logger, configure_logging, log_event
 # - Linux/Pi 默认优先 settings.yaml（实车配置）
 # - Windows 默认优先 settings_cpp.yaml（PC 调试配置）
 # - 可用环境变量 PICAR_CONFIG 强制指定
+
+# 递归读取并填充缺失的配置项
+def _deep_fill_missing(dst: dict, src: dict) -> dict:
+    if not isinstance(dst, dict):
+        dst = {}
+    if not isinstance(src, dict):
+        return dst
+
+    for k, v in src.items():
+        if k not in dst:
+            dst[k] = v
+        else:
+            if isinstance(dst[k], dict) and isinstance(v, dict):
+                _deep_fill_missing(dst[k], v)
+
+    return dst
+
+
 def load_config(prefer_pi: bool = False) :  
     try:
         base_dir = os.path.dirname( os.path.abspath(__file__) )
@@ -50,27 +68,60 @@ def load_config(prefer_pi: bool = False) :
                     os.path.join(base_dir, '../config/settings.yaml'),
                 ]
 
-
-        yaml_path = None
+        valid_paths = []
         for p in yaml_candidates:
-            if os.path.exists(p) and os.path.getsize(p) > 0 : 
-                yaml_path = p
-                break
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                valid_paths.append(p)
 
-        if yaml_path is None :
+        if len(valid_paths) == 0:
             raise FileNotFoundError("No config file found or all config files are empty")
 
-        with open(yaml_path, 'r', encoding='utf-8') as f :
-            ctx.config = yaml.safe_load(f) or {}
+        # 如果显式指定 PICAR_CONFIG，仍然只读这一份
+        if env_cfg:
+            with open(valid_paths[0], 'r', encoding='utf-8') as f:
+                ctx.config = yaml.safe_load(f) or {}
 
-        log_event(logger, source="INIT", event="config_load", result="ok",
-                  reason=os.path.basename(yaml_path),
-                  key={
-                      "prefer_pi": bool(prefer_pi),
-                      "env_override": bool(env_cfg),
-                  },
-                  brief=False)
+            log_event(
+                logger,
+                source="INIT",
+                event="config_load",
+                result="ok",
+                reason=os.path.basename(valid_paths[0]),
+                key={
+                    "prefer_pi": bool(prefer_pi),
+                    "env_override": True,
+                    "merged": False,
+                },
+                brief=False,
+            )
+            return True
+
+        # 默认模式：先读优先配置，再用后面的配置补缺
+        with open(valid_paths[0], 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f) or {}
+
+        for p in valid_paths[1:]:
+            with open(p, 'r', encoding='utf-8') as f:
+                extra_cfg = yaml.safe_load(f) or {}
+            cfg = _deep_fill_missing(cfg, extra_cfg)
+
+        ctx.config = cfg
+
+        log_event(
+            logger,
+            source="INIT",
+            event="config_load",
+            result="ok",
+            reason=os.path.basename(valid_paths[0]),
+            key={
+                "prefer_pi": bool(prefer_pi),
+                "env_override": False,
+                "merged_from": [os.path.basename(p) for p in valid_paths],
+            },
+            brief=False,
+        )
         return True
+    
     except Exception as e:
         log_event(logger, source="INIT", event="config_load", result="fail",
                   reason=str(e), level=logging.ERROR, brief=False)

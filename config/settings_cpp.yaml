@@ -5,7 +5,12 @@
 
 dector:
   enable: true
-  backend: process
+  backend: onnx         # onnx 录屏；要用 C++ 子进程则改为 process
+  model_path: "models/onnx/best.onnx"
+  class_file: "models/classes.txt"
+  conf_threshold: 0.60
+  target_classes: [0, 1, 2]
+  show_window: true
   process:
     exec_path: detector_cpp/build/Release/detector_ncnn.exe  # 原值: detector_cpp/build/Release/detector_ncnn.exe 
     args:
@@ -25,13 +30,12 @@ dector:
 fsm:
   enable: true
 
-# PC先关掉硬件相关线程，避免卡启动
 uart:
-  enable: false  # 原值: false 
+  enable: true  # 原值: false 
 gps:
-  enable: false  # 原值: false 
+  enable: true  # 原值: false 
 patrol:
-  enable: false  # 原值: false 
+  enable: true  # 原值: false 
 
 # 下面是测试命令，实际运行直接在命令行里运行
 # .\detector_cpp\build\Release\detector_ncnn.exe --param=models/ncnn/best.ncnn.param --bin=models/ncnn/best.ncnn.bin --classes=models/classes.txt --source=video:data/test.mp4 --imgsz=640 --threads=4 --conf=0.8 --out=out0 --nms=0.45 --debug=0 --topk=20
