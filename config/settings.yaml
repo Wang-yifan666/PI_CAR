@@ -4,7 +4,7 @@
 uart:
   enable: true
 
-  port: "/dev/ttyAMA0"   # 原值: "COM10"；树莓派常见: "/dev/ttyUSB0" 或 "/dev/ttyAMA0"
+  port: "COM10"   # 原值: "/dev/ttyAMA0"
   baudrate: 115200
   timeout: 1.0          # Serial.read 超时（秒）
 
@@ -20,7 +20,7 @@ uart:
 
 # 视觉相关
 dector :
-  model_path : "models/best.onnx"  # 模型文件
+  model_path : "models/onnx/best.onnx"  # 模型文件
   class_file : "models/classes.txt" # 类别文件
 
   conf_threshold : 0.60 # 置信度阈值
@@ -28,7 +28,7 @@ dector :
 
   show_window : false # 原值: true；树莓派无桌面环境建议关闭显示
 
-  backend: "process"      # onnx\process\ncnn 
+  backend: "ncnn"      # onnx\process
 
   violation :             # 违规判定相关
     enable : true         # 开启

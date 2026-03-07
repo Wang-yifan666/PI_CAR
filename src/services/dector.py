@@ -232,8 +232,12 @@ class DECTOR_ser( threading.Thread ):
         union = area_a + area_b - inter
         return inter / union if union > 0 else 0.0
 
+    # 用于排序检测结果，优先面积大、置信度高的框
+    def _area_conf_key(self, det):
+        return (det.get("area", 0), det.get("conf", 0.0))
+
     # 检查电瓶车是否违规
-    def _check_violation_ebike_strip(self, dets, W, H):
+    def _check_violation_ebike_strip(self , dets, W, H):
         vcfg = ctx.config.get("dector", {}).get("violation", {})
         if not bool(vcfg.get("enable", False)):
             return None
@@ -318,8 +322,33 @@ class DECTOR_ser( threading.Thread ):
 
         return violation_ev
 
+    # 检查是否发现火灾
+    def _check_fire(self , dets) :
+        fire_cfg = ctx.config.get("dector",{}).get("violation",{})
+        fire_id = int(fire_cfg.get("fire_class_id", 1))
+        
+        fires = [d for d in dets if int(d.get("class_id",-1)) == fire_id]
+        if len(fires) == 0 :
+            return None 
+        
+        fires.sort(key=self._area_conf_key, reverse=True)
+        best = fires[0]
+        
+        return {
+            "type": "fire",
+            "rule": "fire_detected",
+            "ts": float(best.get("ts", time.time())),
+            "class_id": int(best.get("class_id", fire_id)),
+            "class_name": best.get("class_name", ""),
+            "conf": float(best.get("conf", 0.0)),
+            "bbox_xyxy": best.get("bbox_xyxy"),
+            "center": best.get("center"),
+            "area": int(best.get("area", 0)),
+            "img_size": best.get("img_size"),
+        }
+
     # 违规存证,保存图片 + 通过JSON保存基本信息
-    def _save_violation_to_data(self, violation_ev, img_bgr, draw_bgr=None):
+    def _save_violation_to_data(self , violation_ev, img_bgr, draw_bgr=None):
         try:
             vcfg = ctx.config.get("dector", {}).get("violation", {})
 
@@ -512,7 +541,7 @@ class DECTOR_ser( threading.Thread ):
                         dist = ((cx_i - lx) ** 2 + (cy_i - ly) ** 2) ** 0.5
                         iou = self._calc_iou_xyxy([x1, y1, x2, y2], lbox)
 
-                        # 只要“足够像同一个目标”（IoU高 或 中心点近）并且仍在时间窗内 -> 不重复打印
+                        # 只要“足够像同一个目标”（IoU高 或 中心点近）并且仍在时间窗内
                         same_obj = ((iou >= self._same_obj_iou_th) or (dist < self._same_obj_px_th)) and (dt < self._same_obj_time_th)
                         should_log = not same_obj
 
@@ -556,7 +585,7 @@ class DECTOR_ser( threading.Thread ):
             # 如果没有违规就上报本帧detection
 
             if len(dets) > 0:
-                dets.sort(key=lambda d: (d.get("area", 0), d.get("conf", 0.0)), reverse=True)
+                dets.sort(key=self._area_conf_key, reverse=True)
                 best = dets[0]
                 try:
                     if ctx.dector_queue.full():
@@ -655,7 +684,7 @@ class DECTOR_ser( threading.Thread ):
                         continue
 
                     # 否则上报本帧最优检测（面积优先，其次置信度）
-                    dets.sort(key=lambda d: (d.get("area", 0), d.get("conf", 0.0)), reverse=True)
+                    dets.sort(key=self._area_conf_key, reverse=True)
                     best = dets[0]
                     try:
                         if hasattr(ctx, "put_latest"):

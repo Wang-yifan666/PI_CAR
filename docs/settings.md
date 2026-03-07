@@ -88,6 +88,9 @@ violation:
 违规判定逻辑：
 只要满足面积比例或中心距离条件之一，即认为违规。
 
+火灾检测：
+使用 `fire_class_id` 作为火焰类别标识，FSM 会结合 `fire_cls` / `fire_conf_threshold` 监听该类别并触发火警返航。
+
 ---
 
 ## 日志去重（log_dedup）
@@ -178,8 +181,15 @@ fsm:
 | violation_cmd      | 违规时下发命令 |
 | log_every_s        | FSM 状态日志节流 |
 | stop_cmd           | 停止命令     |
+| fire_enable        | 是否启用火灾检测返航 |
+| fire_cls           | 火灾类别ID（默认跟随 violation.fire_class_id） |
+| fire_conf_threshold | 火灾触发置信度（默认跟随 dector.conf_threshold） |
 
 > 当前实现以“违规抢占 > 巡逻建议 > 停止”进行仲裁。
+
+火灾检测行为：
+* 视觉检测到类别 `fire_cls`（或事件类型为 `fire`）且置信度不低于 `fire_conf_threshold` 时，FSM 仅触发一次火警事件。
+* 触发后会调用 `set_mission(mode="FIRE_RETURN", return_to_base=True, fire_found_ts=...)`，强制返航并避免重复触发。
 
 ---
 
