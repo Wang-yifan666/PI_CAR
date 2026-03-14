@@ -178,7 +178,7 @@ python tool/mock_COM11_plus.py
 
 建议在树莓派上按“先单模块，再整机”方式联调：
 
-### 1️⃣ 检测进程联调
+### 1 检测进程联调
 
 ```
 python tool/test_process_detector.py
@@ -186,7 +186,7 @@ python tool/test_process_detector.py
 
 期望：持续读到 `[ NCNN ]{...}`。
 
-### 2️⃣ 串口/GPS 联调
+### 2 串口/GPS 联调
 
 ```
 python -m src.main
@@ -194,7 +194,9 @@ python -m src.main
 
 期望：UART 可发送命令、GPS 状态持续更新。
 
-### 3️⃣ 巡逻闭环联调
+> 如需测试停机链路，可在串口侧发送 `M0004`，主程序会记录 `MODE stop_request` 并优雅退出。
+
+### 3 巡逻闭环联调
 
 确认 Patrol/FSM 日志稳定后，再开启完整任务。
 

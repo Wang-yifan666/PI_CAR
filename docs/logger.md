@@ -16,6 +16,7 @@
   * 允许 `level >= WARNING`
   * 或者 `level == INFO 且 brief == True`
 * 用途：只保留关键事件（启动、平台检测、违规确认、打包、上传、退出等），避免刷屏。
+* 典型新增：收到下位机 `M0004` 停机指令时会以 `MODE stop_request` 写入简报。
 
 ### 1.3 Console（终端输出）
 
@@ -87,6 +88,7 @@ log_event(
 * `brief=False`（默认）：不会进入 Brief/Console（除非 level>=WARNING）
 * `brief=True`：允许 INFO 进入 Brief/Console
 * 推荐：只有“关键事件”设置 `brief=True`，避免简报被填满。
+* 停机场景：收到 `M0004` 或外部停机信号时使用 `brief=True`，方便现场快速确认。
 
 ---
 
@@ -249,6 +251,7 @@ log_event(
 | create_ok | 创建成功 | `Picamera2()` 创建成功 |
 | create_fail | 创建失败 | 相机驱动/权限/硬件问题 |
 | keyboard_interrupt | 键盘中断 | Ctrl+C 或外部中断事件 |
+| mode_m0004 | 下位机请求停机 | 收到 M0004 触发优雅停机 |
 | main_exit | 主程序退出 | 正常收尾退出 |
 | fatal_error | 致命错误 | 需要立即停机的错误 |
 | proc_exit | 子进程退出 | detector 子进程退出/崩溃 |
