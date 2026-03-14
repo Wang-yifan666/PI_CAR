@@ -4,6 +4,7 @@ import os
 import yaml
 import threading
 import logging 
+import re
 
 # 对路径进行配置,保证能正确导入模块
 sys.path.append( os.path.dirname(os.path.abspath(__file__)) + '/../')
@@ -20,11 +21,8 @@ from src.core.fsm import FSMService
 from src.services.uploader import UploadService
 
 from src.utils.logger import sys_logger as logger, configure_logging, log_event
+from src.mode.showcase import ShowcaseMode
 
-# 读取配置文件：
-# - Linux/Pi 默认优先 settings.yaml（实车配置）
-# - Windows 默认优先 settings_cpp.yaml（PC 调试配置）
-# - 可用环境变量 PICAR_CONFIG 强制指定
 
 # 递归读取并填充缺失的配置项
 def _deep_fill_missing(dst: dict, src: dict) -> dict:
@@ -42,7 +40,7 @@ def _deep_fill_missing(dst: dict, src: dict) -> dict:
 
     return dst
 
-
+# 读取配置文件，当前优先级的配置项缺失时，自动从次优先级配置项中补齐。返回是否成功加载配置。
 def load_config(prefer_pi: bool = False) :  
     try:
         base_dir = os.path.dirname( os.path.abspath(__file__) )
@@ -127,6 +125,150 @@ def load_config(prefer_pi: bool = False) :
                   reason=str(e), level=logging.ERROR, brief=False)
         return False
 
+#region 处理选择模式
+
+# 读取模式配置
+_MODE_RE = re.compile(r"^M\d{4}$")
+_mode_select_lock = threading.Lock()   # 线程锁
+_mode_select_event = threading.Event() # 事件对象
+_selected_mode_code = ""               # 目前的代码模式
+_shutdown_request_event = threading.Event()  # 是否已请求优雅停机
+
+# 重置模式选择状态
+def _reset_mode_selection():
+    global _selected_mode_code
+    with _mode_select_lock:
+        _selected_mode_code = ""
+    _mode_select_event.clear()
+
+# 获取当前选择的模式
+def _get_selected_mode() -> str:
+    with _mode_select_lock:
+        return _selected_mode_code
+
+# 设置当前选择的模式
+def _set_selected_mode(mode_code: str) -> None:
+    global _selected_mode_code
+    mode_code = str(mode_code or "").strip().upper()
+    if not _MODE_RE.fullmatch(mode_code):
+        return
+
+    with _mode_select_lock:
+        _selected_mode_code = mode_code
+
+    try:
+        ctx.set_mission(
+            selected_mode=mode_code,
+            mode_select_ts=time.time(),
+        )
+    except Exception:
+        pass
+
+    _mode_select_event.set()
+
+
+def _request_graceful_shutdown(reason: str = "") -> bool:
+    """Try to trigger the existing graceful stop path once."""
+    if _shutdown_request_event.is_set():
+        return False
+
+    _shutdown_request_event.set()
+    ctx.system_stop_event.set()
+
+    log_event(
+        logger,
+        source="MODE",
+        event="stop_request",
+        result="ok",
+        reason=reason or "external",
+        key={"via": "M0004"},
+        brief=False,
+        level=logging.INFO,
+    )
+    return True
+
+# 从串口响应中提取模式代码
+def _extract_mode_code_from_resp(resp) -> str:
+    if resp is None:
+        return ""
+
+    candidates = []
+
+    try:
+        for x in (getattr(resp, "lines", []) or []):
+            s = str(x).strip().upper()
+            if s:
+                candidates.append(s)
+    except Exception:
+        pass
+
+    raw = str(getattr(resp, "raw", "") or "").replace("\r", "")
+    if raw:
+        for x in raw.split("\n"):
+            s = x.strip().upper()
+            if s:
+                candidates.append(s)
+
+    for line in candidates:
+        if _MODE_RE.fullmatch(line):
+            return line
+
+    return ""
+
+# 处理串口接收到的模式
+def _uart_mode_callback(resp):
+    mode_code = _extract_mode_code_from_resp(resp)
+    if not mode_code:
+        return
+
+    old_mode = _get_selected_mode()
+    if old_mode == mode_code:
+        return
+
+    _set_selected_mode(mode_code)
+
+    log_event(
+        logger,
+        source="MODE",
+        event="select",
+        result="ok",
+        key={"mode": mode_code},
+        brief=False,
+    )
+
+    if mode_code == "M0004":
+        _request_graceful_shutdown(reason="mode_m0004_rx")
+
+# 等待模式选择并返回选择的模式
+def _wait_mode_selection(timeout_s=20.0) -> str:
+    start_ts = time.time()
+
+    try:
+        ctx.set_mission(mode="WAIT_MODE_SELECT")
+    except Exception:
+        pass
+
+    while not ctx.system_stop_event.is_set():
+        mode_code = _get_selected_mode()
+        if _MODE_RE.fullmatch(mode_code):
+            return mode_code
+
+        if _shutdown_request_event.is_set():
+            return mode_code or "M0004"
+
+        if timeout_s is not None and timeout_s > 0:
+            if (time.time() - start_ts) >= timeout_s:
+                return ""
+
+        _mode_select_event.wait(timeout=0.1)
+
+    if _shutdown_request_event.is_set():
+        return _get_selected_mode() or "M0004"
+
+    return ""
+
+#endregion
+
 # 方便从线程中拿命令
 def uart_pump(uart):
     last_cmd = None
@@ -203,8 +345,8 @@ def _cmd_kind(cmd: str) -> str:
     if c.startswith(("R0", "L0", "D", "A")):
         return "discrete"
 
+# 判断是否为pi，
 def _detect_platform_is_pi() -> tuple[bool, str, str, str]:
-    """检测平台是否为树莓派，返回 (is_pi, result, reason, err)."""
 
     # 两级检测：先尝试创建，再尝试 import
     try:
@@ -216,6 +358,7 @@ def _detect_platform_is_pi() -> tuple[bool, str, str, str]:
             return False, "fail", "create_fail", str(e)
     except Exception as e:
         return False, "fail", "import_fail", str(e)
+
 
 def main() :
     is_pi, pf_result, pf_reason, pf_err = _detect_platform_is_pi()
@@ -238,6 +381,16 @@ def main() :
 
     if not load_config(prefer_pi=prefer_pi_config) :
         return
+    
+    # 开始选择模式
+    _reset_mode_selection()
+    # 先设为None
+    gps_thread = None
+    patrol_thread = None
+    dector_thread = None
+    fsm_thread = None
+    upload_thread = None
+    showcase_thread = None
 
     # 初始化 UART
     uart_cfg = ctx.config.get("uart", {})
@@ -252,13 +405,21 @@ def main() :
             baudrate=int(uart_cfg.get("baudrate", 115200)),
             timeout=float(uart_cfg.get("timeout", 1.0)),
         )
-
+        
+        # 设置模式选择回调
+        uart.set_response_callback(_uart_mode_callback)
+        
         # 放到全局上下文，方便 FSM 等模块使用
         ctx.uart = uart
 
-        log_event(logger, source="UART", event="init", action="connect", key={"port": uart.port, "baudrate": uart.baudrate, "timeout": uart.timeout}, brief=False)
+        log_event(logger, 
+                  source="UART", 
+                  event="init", 
+                  action="connect", 
+                  key={"port": uart.port, "baudrate": uart.baudrate, "timeout": uart.timeout}, 
+                  brief=False)
 
-        ok = uart.connect()
+        ok = uart.connect()  
         if not ok:
             log_event(logger, source="UART", event="connect", result="fail", brief=False, level=logging.WARNING)
             if uart_required:
@@ -274,82 +435,338 @@ def main() :
     else:
         ctx.uart = None
         log_event(logger, source="UART", event="disabled", result="skip", brief=False, level=logging.WARNING)
+        
+    # 开始模式选择
+    selected_mode = ""
 
-    # 创建并启动 gps_service
-    gps_cfg = ctx.config.get("gps", {})
-    gps_enable = bool(gps_cfg.get("enable", True))
+    if uart_enable and (uart is not None) and (ctx.uart is not None):
+        log_event(
+            logger,
+            source="MODE",
+            event="wait",
+            result="begin",
+            brief=False,
+        )
 
-    gps_thread = None
-    if gps_enable:
-        try:
-            gps_thread = GPSService(gps_cfg)  # 你如果构造函数不是这样，按你的改
-            gps_thread.start()
-            log_event(logger, source="GPS", event="thread_spawn", action="start", result="ok", key={"thread": "GPSService"}, level=logging.DEBUG, brief=False)
-        except Exception as e:
-            log_event(logger, source="GPS", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
-            gps_thread = None
+        selected_mode = _wait_mode_selection(timeout_s=20.0)
+
+        if not selected_mode:
+            log_event(
+                logger,
+                source="MODE",
+                event="wait",
+                result="fail",
+                reason="timeout_no_mode",
+                level=logging.ERROR,
+                brief=False,
+            )
+            return
+        
+    # 给 PC 调试留的，默认按 fsm.default_mode    
     else:
-        log_event(logger, source="GPS", event="disabled", result="skip", level=logging.WARNING, brief=False)
+        fsm_cfg = (ctx.config or {}).get("fsm", {})
+        selected_mode = str(fsm_cfg.get("default_mode", "M0001")).strip().upper()
 
-    # 创建巡逻线程
-    patrol_cfg = ctx.config.get("patrol", {})
-    patrol_enable = bool(patrol_cfg.get("enable", True))
+        # 非法值兜底
+        if not _MODE_RE.fullmatch(selected_mode):
+            selected_mode = "M0001"
 
-    patrol_thread = None
-    if patrol_enable:
+        _set_selected_mode(selected_mode)
+
+        log_event(
+            logger,
+            source="MODE",
+            event="fallback",
+            result="ok",
+            key={"mode": selected_mode, "source": "fsm.default_mode"},
+            brief=False,
+        )
+
+    # 模式分流
+    
+    #region M0001
+    if selected_mode == "M0001":
+        ctx.set_mission(mode="PATROL", selected_mode=selected_mode)
+
+        # 创建并启动 gps_service
+        gps_cfg = ctx.config.get("gps", {})
+        gps_enable = bool(gps_cfg.get("enable", True))
+        gps_thread = None
+
+        if gps_enable:
+            try:
+                gps_thread = GPSService(gps_cfg)
+                gps_thread.start()
+                log_event(
+                    logger,
+                    source="GPS",
+                    event="thread_spawn",
+                    action="start",
+                    result="ok",
+                    key={"thread": "GPSService"},
+                    level=logging.DEBUG,
+                    brief=False,
+                )
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="GPS",
+                    event="thread_spawn",
+                    action="start",
+                    result="fail",
+                    reason=str(e),
+                    level=logging.ERROR,
+                    brief=False,
+                )
+                gps_thread = None
+        else:
+            log_event(
+                logger,
+                source="GPS",
+                event="disabled",
+                result="skip",
+                level=logging.WARNING,
+                brief=False,
+            )
+
+        # 创建巡逻线程
+        patrol_cfg = ctx.config.get("patrol", {})
+        patrol_enable = bool(patrol_cfg.get("enable", True))
+        patrol_thread = None
+
+        if patrol_enable:
+            try:
+                patrol_thread = PatrolService(patrol_cfg)
+                patrol_thread.start()
+                log_event(
+                    logger,
+                    source="PATROL",
+                    event="thread_spawn",
+                    action="start",
+                    result="ok",
+                    key={"thread": "PatrolService"},
+                    level=logging.DEBUG,
+                    brief=False,
+                )
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="PATROL",
+                    event="thread_spawn",
+                    action="start",
+                    result="fail",
+                    reason=str(e),
+                    level=logging.ERROR,
+                    brief=False,
+                )
+                patrol_thread = None
+        else:
+            log_event(
+                logger,
+                source="PATROL",
+                event="disabled",
+                result="skip",
+                level=logging.WARNING,
+                brief=False,
+            )
+
+        # 创建监视和大脑线程
+        dector_thread = DECTOR_ser()
+        fsm_thread = FSMService()
+
+        # 上传线程
+        upload_cfg = ctx.config.get("uploader", {}) if hasattr(ctx, "config") else {}
+        upload_enable = bool(upload_cfg.get("enable", False))
+        upload_thread = None
+
+        if upload_enable:
+            try:
+                upload_thread = UploadService(ctx.config)
+                upload_thread.start()
+                log_event(
+                    logger,
+                    source="UPLOAD",
+                    event="thread_spawn",
+                    action="start",
+                    result="ok",
+                    key={"endpoint": upload_cfg.get("endpoint", "")},
+                    level=logging.DEBUG,
+                    brief=False,
+                )
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="UPLOAD",
+                    event="thread_spawn",
+                    action="start",
+                    result="fail",
+                    reason=str(e),
+                    level=logging.ERROR,
+                    brief=False,
+                )
+
+        log_event(logger, source="INIT", event="threads", action="start_bar", result="ok", brief=False)
+        dector_thread.start()
+        fsm_thread.start()
+        
+    #endregion
+
+    #region M0002
+    elif selected_mode == "M0002":
+        ctx.set_mission(mode="SHOWCASE", selected_mode=selected_mode)
+
+        showcase_cfg = ctx.config.get("showcase", {})
+
         try:
-            patrol_thread = PatrolService(patrol_cfg)
-            patrol_thread.start()
-            log_event(logger, source="PATROL", event="thread_spawn", action="start", result="ok", key={"thread": "PatrolService"}, level=logging.DEBUG, brief=False)
+            showcase_thread = ShowcaseMode(showcase_cfg)
+            showcase_thread.start()
+            log_event(
+                logger,
+                source="SHOWCASE",
+                event="thread_spawn",
+                action="start",
+                result="ok",
+                key={"thread": "ShowcaseMode"},
+                level=logging.DEBUG,
+                brief=False,
+            )
         except Exception as e:
-            log_event(logger, source="PATROL", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
-            patrol_thread = None
+            log_event(
+                logger,
+                source="SHOWCASE",
+                event="thread_spawn",
+                action="start",
+                result="fail",
+                reason=str(e),
+                level=logging.ERROR,
+                brief=False,
+            )
+            return
+
+    #endregion
+
+    #region M0004
+    elif selected_mode == "M0004":
+        ctx.set_mission(mode="STOP_REQUEST", selected_mode=selected_mode)
+        _request_graceful_shutdown(reason="mode_m0004_dispatch")
+
+        log_event(
+            logger,
+            source="MODE",
+            event="dispatch",
+            result="stop",
+            reason="mode_m0004",
+            key={"mode": selected_mode},
+            level=logging.INFO,
+            brief=False,
+        )
+
+    #endregion
+    
     else:
-        log_event(logger, source="PATROL", event="disabled", result="skip", level=logging.WARNING, brief=False)
+        ctx.set_mission(mode=f"PRESET_{selected_mode}", selected_mode=selected_mode)
 
-    # 创建监视和大脑线程
-    dector_thread = DECTOR_ser()
-    fsm_thread = FSMService()
+        log_event(
+            logger,
+            source="MODE",
+            event="dispatch",
+            result="skip",
+            reason="unsupported_mode",
+            key={"mode": selected_mode},
+            level=logging.WARNING,
+            brief=False,
+        )
 
-    # 上传线程（可选）
-    upload_cfg = ctx.config.get("uploader", {}) if hasattr(ctx, "config") else {}
-    upload_enable = bool(upload_cfg.get("enable", False))
-    upload_thread = None
-    if upload_enable:
-        try:
-            upload_thread = UploadService(ctx.config)
-            upload_thread.start()
-            log_event(logger, source="UPLOAD", event="thread_spawn", action="start", result="ok", key={"endpoint": upload_cfg.get("endpoint", "")}, level=logging.DEBUG, brief=False)
-        except Exception as e:
-            log_event(logger, source="UPLOAD", event="thread_spawn", action="start", result="fail", reason=str(e), level=logging.ERROR, brief=False)
-
-    # 启动线程
-    log_event(logger, source="INIT", event="threads", action="start_bar", result="ok", brief=False)
-    dector_thread.start()
-    fsm_thread.start()
     log_event(logger, source="INIT", event="startup", result="ok", brief=None)
-
     log_event(logger, source="INIT", event="running", result="ok", brief=False)
 
     try :
-        while True :
+        stop_logged = False
+        while True:
+            if ctx.system_stop_event.is_set():
+                if not stop_logged:
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="system_stop_event",
+                        level=logging.INFO,
+                        brief=None,
+                    )
+                    stop_logged = True
+                break
+
             if uart_enable and ctx.uart is not None:
                 uart_ok = (ctx.uart.ser is not None) and getattr(ctx.uart.ser, "is_open", False)
                 if uart_required and (not uart_ok):
-                    log_event(logger, source="INIT", event="health", result="stop", reason="uart_required_disconnect", level=logging.WARNING, brief=None)
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="uart_required_disconnect",
+                        level=logging.WARNING,
+                        brief=None,
+                    )
+                    break
+            
+            # 如果是 M0001 模式，任何一个死掉都退出
+            if selected_mode == "M0001":
+                if (dector_thread is not None) and (not dector_thread.is_alive()):
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="detect_thread_dead",
+                        level=logging.WARNING,
+                        brief=None,
+                    )
                     break
 
-            if not ( dector_thread.is_alive() ) :
-                log_event(logger, source="INIT", event="health", result="stop", reason="detect_thread_dead", level=logging.WARNING, brief=None)
-                break
-            if not ( fsm_thread.is_alive() ) :
-                log_event(logger, source="INIT", event="health", result="stop", reason="fsm_thread_dead", level=logging.WARNING, brief=None)
-                break
-            if gps_enable and (gps_thread is not None) and (not gps_thread.is_alive()):
-                log_event(logger, source="INIT", event="health", result="stop", reason="gps_thread_dead", level=logging.WARNING, brief=None)
-                break
+                if (fsm_thread is not None) and (not fsm_thread.is_alive()):
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="fsm_thread_dead",
+                        level=logging.WARNING,
+                        brief=None,
+                    )
+                    break
+
+                gps_cfg = ctx.config.get("gps", {})
+                gps_enable = bool(gps_cfg.get("enable", True))
+                if gps_enable and (gps_thread is not None) and (not gps_thread.is_alive()):
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="gps_thread_dead",
+                        level=logging.WARNING,
+                        brief=None,
+                    )
+                    break
+            
+            # 如果是 M0002 模式，只有展示线程死了才退出
+            elif selected_mode == "M0002":
+                if (showcase_thread is not None) and (not showcase_thread.is_alive()):
+                    log_event(
+                        logger,
+                        source="INIT",
+                        event="health",
+                        result="stop",
+                        reason="showcase_thread_exit",
+                        level=logging.INFO,
+                        brief=None,
+                    )
+                    break
 
             time.sleep(1)
+
 
     except KeyboardInterrupt :
         log_event(logger,source="INIT",event="stop_request",result="ok",reason="keyboard_interrupt",key={"where": "main_try_except"},brief=False,level=logging.INFO, ) 
@@ -384,15 +801,44 @@ def main() :
                 ctx.uart.disconnect()
         except Exception :
             pass
+        
+        # 等待其他线程退出
+        if dector_thread is not None:
+            try:
+                dector_thread.join(timeout=2)
+            except Exception:
+                pass
 
-        try: 
-            dector_thread.join(timeout = 2)
-        except Exception : 
-            pass 
-        try: 
-            fsm_thread.join(timeout = 2)
-        except Exception : 
-            pass
+        if fsm_thread is not None:
+            try:
+                fsm_thread.join(timeout=2)
+            except Exception:
+                pass
+
+        if gps_thread is not None:
+            try:
+                gps_thread.join(timeout=2)
+            except Exception:
+                pass
+
+        if patrol_thread is not None:
+            try:
+                patrol_thread.join(timeout=2)
+            except Exception:
+                pass
+
+        if upload_thread is not None:
+            try:
+                upload_thread.join(timeout=2)
+            except Exception:
+                pass
+
+        if showcase_thread is not None:
+            try:
+                showcase_thread.join(timeout=2)
+            except Exception:
+                pass
+
         if gps_thread is not None :
             try : 
                 gps_thread.join(timeout = 2)

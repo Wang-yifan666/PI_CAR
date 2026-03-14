@@ -18,6 +18,7 @@ DATEFMT = "%Y-%m-%d %H:%M:%S"
 SOURCE_WHITELIST = {"INIT", "FSM", "PATROL", "GPS", "UART", "DETECT", "UPLOAD", "PROCESS", "ZIP"}
 SOURCE_ALIAS = {"DECTOR": "DETECT"}
 
+# 白名单中事件默认 brief=True，其他事件默认 brief=False，均可通过参数覆盖。
 BRIEF_WHITELIST = {
     "INIT": {"platform_detect", "startup", "ready", "stop"},
     "DETECT": {"violation_confirm", "snapshot_saved", "process_exit", "violation"},
@@ -25,7 +26,7 @@ BRIEF_WHITELIST = {
     "UPLOAD": {"upload_done", "upload_fail"},
 }
 
-
+# 确保指定的目录存在
 def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
@@ -33,6 +34,7 @@ def _ensure_dir(path: str) -> None:
 class EnsureFieldsFilter(logging.Filter):
     """为所有记录补全 source / brief，防止 formatter 缺字段。"""
 
+    # 过滤日志记录，确保 source 和 brief 字段存在
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
         if not hasattr(record, "source"):
             record.source = "UNKNOWN"
@@ -50,7 +52,7 @@ class BriefFilter(logging.Filter):
         brief = getattr(record, "brief", False)
         return bool(brief) and (record.levelno == logging.INFO)
 
-
+# 规范日志的来源
 def _normalize_source(src: Optional[str]) -> str:
     src = (src or "INIT").upper()
     src = SOURCE_ALIAS.get(src, src)
@@ -58,11 +60,11 @@ def _normalize_source(src: Optional[str]) -> str:
         return "INIT"
     return src
 
-
+# 格式化日志输出
 def _formatter() -> logging.Formatter:
     return logging.Formatter(FORMAT, DATEFMT)
 
-
+# 构建文件处理器
 def _build_file_handler(path: str, level: int, brief_only: bool) -> logging.Handler:
     handler = RotatingFileHandler(path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8")
     handler.setLevel(level)
@@ -71,7 +73,7 @@ def _build_file_handler(path: str, level: int, brief_only: bool) -> logging.Hand
         handler.addFilter(BriefFilter())
     return handler
 
-
+# 输出到控制台
 def _build_stream_handler(level: int, brief_only: bool) -> logging.Handler:
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
@@ -80,11 +82,11 @@ def _build_stream_handler(level: int, brief_only: bool) -> logging.Handler:
         handler.addFilter(BriefFilter())
     return handler
 
-
+# 时间戳格式化
 def _timestamp() -> str:
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-
+# 生成日志文件路径
 def _log_paths() -> Dict[str, str]:
     ts = _timestamp()
     return {
@@ -92,7 +94,7 @@ def _log_paths() -> Dict[str, str]:
         "brief": os.path.join(LOG_DIR_BE, f"log_be_{ts}.log"),
     }
 
-
+# 清除指定日志记录器上已绑定的所有处理器
 def _reset_handlers(lg: logging.Logger) -> None:
     for h in list(lg.handlers):
         try:
@@ -101,14 +103,8 @@ def _reset_handlers(lg: logging.Logger) -> None:
         except Exception:
             pass
 
-
+# 配置日志记录器
 def configure_logging(*, is_pi: bool = False, enable_cn: Optional[bool] = None, stage: str = "runtime") -> logging.Logger:
-    """配置全局 logger，复用名称 sys_logger。
-
-    - detailed: DEBUG+
-    - brief: INFO+ with BriefFilter (stdout 同 brief)
-    """
-
     _ensure_dir(LOG_DIR_DE)
     _ensure_dir(LOG_DIR_BE)
 
@@ -131,9 +127,8 @@ def configure_logging(*, is_pi: bool = False, enable_cn: Optional[bool] = None, 
     log_event(lg, source="INIT", event="logging_configured", key={"is_pi": is_pi, "enable_cn": enable_cn, "stage": stage}, level=logging.DEBUG, brief=False)
     return lg
 
-
+# 格式化日志字段值，支持多种类型
 def _format_value(val: Any) -> Optional[str]:
-    """统一格式化输出，保持布尔小写、浮点 1-2 位小数，None/空串跳过。"""
 
     if val is None:
         return None
@@ -165,7 +160,7 @@ def _format_value(val: Any) -> Optional[str]:
     text = str(val)
     return text if text != "" else None
 
-
+# 格式化字典 k=v 形式的字符串
 def _format_kvs(items: Dict[str, Any], *, prefix: str = "", sep: str = " ") -> str:
     parts: Iterable[str] = (
         f"{prefix}{k}={v}"
@@ -175,7 +170,7 @@ def _format_kvs(items: Dict[str, Any], *, prefix: str = "", sep: str = " ") -> s
     )
     return sep.join(parts)
 
-
+# 构建日志消息主体，包含事件、动作、关键字段、结果、原因、耗时和相关 ID 等信息
 def _build_message(source: str, fields: Dict[str, Any]) -> str:
     event = fields.get("event")
     action = fields.get("action")
@@ -234,7 +229,7 @@ def _build_message(source: str, fields: Dict[str, Any]) -> str:
 
     return " | ".join(segments)
 
-
+# 根据来源和事件判断是否默认 brief=True，优先级：参数 > 白名单 > False。
 def _default_brief(src: str, event: Optional[str], brief: Optional[bool], level: int) -> bool:
     if brief is not None:
         return bool(brief)
@@ -246,7 +241,8 @@ def _default_brief(src: str, event: Optional[str], brief: Optional[bool], level:
 
     return False
 
-
+# 实际上的日志记录函数
+# 接收参数包括日志记录器、来源、事件、动作、关键字段、结果、原因、耗时、相关 ID、是否简洁输出、日志级别和自定义消息等
 def log_event(
     logger: logging.Logger,
     *,
@@ -275,7 +271,6 @@ def log_event(
     msg = message if message is not None else _build_message(src, fields)
     logger.log(level, msg, extra={"source": src, "brief": _default_brief(src, event, brief, level)})
 
-
-# 默认初始化：先用 PC 模式，后续 main 会按实际 is_pi 重新配置
+# 默认初始化
 sys_logger = configure_logging(is_pi=False, enable_cn=None, stage="import")
         

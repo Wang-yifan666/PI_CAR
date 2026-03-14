@@ -17,6 +17,7 @@
 
 * `config/settings.yaml`：Linux / 树莓派实车主配置
 * `config/settings_cpp.yaml`：Windows / PC 调试配置（视频回放、硬件线程可关闭）
+* 串口模式选择：默认等待下位机发送 `Mxxxx`；其中 `M0001`=巡逻，`M0002`=展演，`M0004`=优雅停机。若下位机发送 `M0004`，主程序直接走停机流程。
 
 ---
 

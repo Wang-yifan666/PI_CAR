@@ -56,6 +56,7 @@ dector :
   
 # fsm相关
 fsm:
+  default_mode: "M0002"  # M0001: 违规检测；M0002: 巡逻展示
   rate_hz : 5
   lost_timeout_s : 0.8
 
@@ -112,3 +113,26 @@ data_pack:
   data_dir: "./datas"
   out_dir: "./packs"
   prefix: "datas"
+
+# 展示逻辑
+showcase:
+  start_delay_s: 0.5
+  repeat: false
+  loop_interval_s: 0.2
+  stop_cmd: S
+  actions:
+    - cmd: F0002
+      duration: 2.0
+      note: forward_1
+    - cmd: R0090
+      duration: 1.5
+      note: right_turn_1
+    - cmd: F0002
+      duration: 2.0
+      note: forward_2
+    - cmd: R0090
+      duration: 1.5
+      note: right_turn_2
+    - cmd: S
+      duration: 0.3
+      note: stop

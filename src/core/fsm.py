@@ -94,7 +94,7 @@ class FSMService(threading.Thread) :
         if ev_type == "violation":
             return True
 
-        # 默认：不因为 detection 或 fake 占用控制权
+        # 不因为 detection 或 fake 占用控制权
         return False  
     
     # 判定是否触发火警
