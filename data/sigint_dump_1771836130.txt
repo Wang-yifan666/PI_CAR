@@ -1,0 +1,54 @@
+SIGINT received: signum=2
+Thread 0x000077e8 (most recent call first):
+  File "D:\PI_CAR\src/..\src\services\process_detector.py", line 78 in _read_stderr
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 982 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x00004b28 (most recent call first):
+  File "D:\PI_CAR\src/..\src\services\process_detector.py", line 55 in _read_stdout
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 982 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x00002b50 (most recent call first):
+  File "D:\PI_CAR\src/..\src\core\fsm.py", line 213 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x00007498 (most recent call first):
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 331 in wait
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\queue.py", line 180 in get
+  File "D:\PI_CAR\src/..\src\services\process_detector.py", line 83 in poll
+  File "D:\PI_CAR\src/..\src\services\dector.py", line 596 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x00005e84 (most recent call first):
+  File "D:\PI_CAR\src/..\src\core\patrol_logic.py", line 188 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x000077d0 (most recent call first):
+  File "D:\PI_CAR\src/..\src\services\gps_service.py", line 153 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x000007f4 (most recent call first):
+  File "D:\PI_CAR\.venv\Lib\site-packages\serial\serialwin32.py", line 321 in write
+  File "D:\PI_CAR\src/..\src\drivers\uart.py", line 356 in send_command
+  File "D:\PI_CAR\src\main.py", line 101 in uart_pump
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 982 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Thread 0x00007ac4 (most recent call first):
+  File "D:\PI_CAR\src/..\src\drivers\uart.py", line 215 in _receive_loop
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 982 in run
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1045 in _bootstrap_inner
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\threading.py", line 1002 in _bootstrap
+
+Current thread 0x0000360c (most recent call first):
+  File "D:\PI_CAR\src\main.py", line 17 in _sigint_handler
+  File "D:\PI_CAR\src\main.py", line 248 in main
+  File "D:\PI_CAR\src\main.py", line 317 in <module>

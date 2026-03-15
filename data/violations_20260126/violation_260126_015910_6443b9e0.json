@@ -1,0 +1,56 @@
+{
+  "type": "violation",
+  "rule": "ebike_with_strip_nearby",
+  "ts": "260126_015910",
+  "ts_epoch": 1769363950.488507,
+  "time_local": "2026-01-26 01:59:10",
+  "img_size": [
+    640,
+    640
+  ],
+  "dist_norm": 0.3851903192335576,
+  "ebike_area_norm": 0.32296796150400026,
+  "ebike": {
+    "class_id": 0,
+    "class_name": "ebike",
+    "conf": 0.9614412784576416,
+    "bbox_xyxy": [
+      188,
+      33,
+      500,
+      457
+    ],
+    "center": [
+      344,
+      245
+    ],
+    "area": 132288
+  },
+  "strip": {
+    "class_id": 2,
+    "class_name": "power",
+    "conf": 0.9353301525115967,
+    "bbox_xyxy": [
+      322,
+      436,
+      461,
+      538
+    ],
+    "center": [
+      391,
+      487
+    ],
+    "area": 14178
+  },
+  "gps": {
+    "ok": false,
+    "lat": null,
+    "lon": null,
+    "ts_epoch": 0.0,
+    "source": "unknown"
+  },
+  "artifacts": {
+    "image": "d:\\PI_CAR\\data\\violations_20260126\\violation_260126_015910_6443b9e0.jpg",
+    "json": "d:\\PI_CAR\\data\\violations_20260126\\violation_260126_015910_6443b9e0.json"
+  }
+}
