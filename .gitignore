@@ -1,5 +1,7 @@
 # Privacy
 data/
+!data/
+!data/test.mp4
 zips/
 
 *.zip
