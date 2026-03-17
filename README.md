@@ -253,14 +253,16 @@ docs/settings.md
 ```bash
 cat /etc/os-release
 getconf LONG_BIT
-libcamera-hello --list-cameras
+rpicam-hello --list-cameras
+# 旧版镜像可用：libcamera-hello --list-cameras（旧模板）
 ```
 
 2 安装依赖并创建虚拟环境
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip cmake build-essential pkg-config libopencv-dev libcamera-dev python3-picamera2
+sudo apt install -y git python3 python3-venv python3-pip cmake build-essential pkg-config libopencv-dev rpicam-apps python3-picamera2
+# 旧版镜像依赖：libcamera-dev（旧模板）
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
