@@ -5,7 +5,7 @@
 
 dector:
   enable: true
-  backend: process         # onnx 录屏；要用 C++ 子进程则改为 process
+  backend: process       # onnx 录屏；要用 C++ 子进程则改为 process
   model_path: "models/onnx/best.onnx"
   class_file: "models/classes.txt"
   conf_threshold: 0.60

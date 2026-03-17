@@ -115,6 +115,20 @@ class ShowcaseMode(threading.Thread):
             result="ok",
             brief=False,
         )
+        log_event(
+            logger,
+            source="SHOWCASE",
+            event="config",
+            action="load",
+            result="ok",
+            key={
+                "start_delay_s": self.start_delay_s,
+                "repeat": self.repeat,
+                "loop_interval_s": self.loop_interval_s,
+                "stop_cmd": self.stop_cmd,
+                "actions_count": len(self.actions),
+            }
+        ) 
 
         ctx.set_mission(
             mode="SHOWCASE",
