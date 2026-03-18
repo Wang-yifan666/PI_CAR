@@ -248,6 +248,28 @@ def _wait_mode_selection(timeout_s=20.0) -> str:
     except Exception:
         pass
 
+    showcase_cfg = (ctx.config or {}).get("showcase", {})
+    if bool(showcase_cfg.get("pi_test_only", False)):
+        fsm_cfg = (ctx.config or {}).get("fsm", {})
+        default_mode = str(fsm_cfg.get("default_mode", "M0001")).strip().upper()
+
+        if not _MODE_RE.fullmatch(default_mode):
+            default_mode = "M0001"
+
+        _set_selected_mode(default_mode)
+
+        log_event(
+            logger,
+            source="MODE",
+            event="wait",
+            result="skip",
+            reason="pi_test_only",
+            key={"mode": default_mode},
+            brief=False,
+        )
+
+        return default_mode
+
     while not ctx.system_stop_event.is_set():
         mode_code = _get_selected_mode()
         if _MODE_RE.fullmatch(mode_code):
