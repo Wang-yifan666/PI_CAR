@@ -116,6 +116,7 @@ data_pack:
 
 # 展示逻辑
 showcase:
+  pi_test_only: false
   start_delay_s: 0.5
   repeat: false
   loop_interval_s: 0.2
