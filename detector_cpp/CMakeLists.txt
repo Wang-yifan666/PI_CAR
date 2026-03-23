@@ -22,7 +22,7 @@ set(NCNN_VULKAN OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/ncnn)
 
 # OpenCV from vcpkg: prefer CONFIG mode
-set(OpenCV_DIR "D:/opencv/opencv_4.12/build/x64/vc16/lib")
+# set(OpenCV_DIR "D:/opencv/opencv_4.12/build/x64/vc16/lib")
 find_package(OpenCV CONFIG REQUIRED)
 
 add_executable(detector_stub stub.cpp)

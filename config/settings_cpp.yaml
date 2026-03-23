@@ -18,7 +18,7 @@ dector:
       - --bin=models/ncnn/best.ncnn.bin
       - --classes=models/classes.txt
       - --source=video:data/test.mp4  # 原值: video:data/test.mp4
-      # - --source=camera:0           # 实车可改为 camera:0
+      # - --source=camera:0           # camera:0
       - --imgsz=640
       - --threads=4
       - --conf=0.8
@@ -31,7 +31,7 @@ fsm:
   enable: true
 
 uart:
-  enable: false  # 原值: false 
+  enable: true  # 原值: false 
 gps:
   enable: true  # 原值: false 
 patrol:
@@ -39,3 +39,4 @@ patrol:
 
 # 下面是测试命令，实际运行直接在命令行里运行
 # .\detector_cpp\build\Release\detector_ncnn.exe --param=models/ncnn/best.ncnn.param --bin=models/ncnn/best.ncnn.bin --classes=models/classes.txt --source=video:data/test.mp4 --imgsz=640 --threads=4 --conf=0.8 --out=out0 --nms=0.45 --debug=0 --topk=20
+# ./detector_cpp/build/detector_ncnn --param=models/ncnn/best.ncnn.param --bin=models/ncnn/best.ncnn.bin --classes=models/classes.txt --source=video:data/test.mp4 --imgsz=640 --threads=4 --conf=0.8 --out=out0 --nms=0.45 --debug=0 --topk=20

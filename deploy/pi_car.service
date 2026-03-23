@@ -1,0 +1,16 @@
+[Unit]
+Description=PI_CAR main.py service
+After=multi-user.target
+
+[Service]
+Type=simple
+User=wangyifan
+WorkingDirectory=/home/wangyifan/PI_CAR/src
+ExecStartPre=/bin/sleep 0.5
+ExecStart=/home/wangyifan/PI_CAR/.venv/bin/python /home/wangyifan/PI_CAR/src/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

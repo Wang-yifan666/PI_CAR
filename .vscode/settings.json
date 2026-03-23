@@ -1,4 +1,4 @@
 {
     "python.REPL.enableREPLSmartSend": false,
-    "cmake.sourceDirectory": "D:/PI_CAR/detector_cpp/third_party/ncnn/examples"
+    "cmake.sourceDirectory": "/home/wangyifan/PI_CAR/detector_cpp/third_party/ncnn/tools/quantize"
 }

@@ -4,7 +4,7 @@
 uart:
   enable: true
 
-  port: "COM10"   # 原值: "/dev/ttyAMA0"
+  port: "/dev/serial/by-id/usb-CMSIS-DAP_STM32_CMSIS-DAP_CMSIS-DAP-if01"   # 原值: "com10"
   baudrate: 115200
   timeout: 1.0          # Serial.read 超时（秒）
 
@@ -26,7 +26,7 @@ dector :
   conf_threshold : 0.60 # 置信度阈值
   target_classes : [0 , 1 , 2]   # 需要检测的类别
 
-  show_window : false # 原值: true；树莓派无桌面环境建议关闭显示
+  show_window : false  # 原值: true；
 
   backend: "ncnn"      # onnx\process
 
@@ -35,8 +35,8 @@ dector :
 
     cooldown_s: 60.0      # 该事件内不会存第二次
 
-    ebike_class_id : 0 
-    fire_class_id : 1 
+    ebike_class_id : 0
+    fire_class_id : 1
     strip_class_id : 2
 
     # 判定足够近的条件，满足任一即为违规
@@ -50,13 +50,13 @@ dector :
     same_obj_iou_th: 0          # IoU 大于该值认为同一个目标
 
   process:
-    exec_path: "detector_cpp/build/Release/detector_ncnn" # 原值: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
+    exec_path: "detector_cpp/build/detector_ncnn" # 原值: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
     args: []
     opencv_bin: ""           # Windows 可选，若设置则自动加入 PATH
   
 # fsm相关
 fsm:
-  default_mode: "M0002"  # M0001: 违规检测；M0002: 巡逻展示
+  default_mode: "M0001"  # M0001: 违规检测；M0002: 巡逻展示
   rate_hz : 5
   lost_timeout_s : 0.8
 
@@ -73,7 +73,7 @@ fsm:
   patrol_wz_freq : 0.8
   
 uploader : 
-  enable : false                     # 原值: true；未配置真实 endpoint 前建议关闭
+  enable : false                    # 原值: true；未配置真实 endpoint 前建议关闭
   endpoint : ""                     # 原值: "https://"；上线前替换为真实上传地址
   zip_root : "data"                 # 默认打包根目录
   zip_output_dir : "zips"           # zip 输出目录
@@ -116,24 +116,27 @@ data_pack:
 
 # 展示逻辑
 showcase:
-  pi_test_only: false
   start_delay_s: 0.5
-  repeat: false
+  repeat: true
   loop_interval_s: 0.2
   stop_cmd: S
+  pi_test_only: true    # 如果开启就默认进入 default_mode 
   actions:
+    # - cmd: F0002
+    #   duration: 2.0
+    #   note: forward_1
     - cmd: F0002
-      duration: 2.0
+      duration: 2.1
       note: forward_1
-    - cmd: R0090
-      duration: 1.5
+    - cmd: HL002
+      duration: 2.1
       note: right_turn_1
-    - cmd: F0002
-      duration: 2.0
+    - cmd: B0002
+      duration: 2.1
       note: forward_2
-    - cmd: R0090
-      duration: 1.5
+    - cmd: HR002
+      duration: 2.1
       note: right_turn_2
-    - cmd: S
-      duration: 0.3
-      note: stop
+    # - cmd: S
+    #   duration: 0.3
+    #   note: stop
