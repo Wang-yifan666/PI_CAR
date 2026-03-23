@@ -7,6 +7,7 @@
 ![Status](https://img.shields.io/badge/Status-In_Development-yellow.svg)
 
 ---
+> 本仓库将树莓派上的调参结果推送到 PI 分支上。以下主要为m默认结果。
 
 # 项目简介
 
