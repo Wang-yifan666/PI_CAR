@@ -7,7 +7,7 @@
 ![Status](https://img.shields.io/badge/Status-In_Development-yellow.svg)
 
 ---
-> 本仓库将树莓派上的调参结果推送到 PI 分支上。以下主要为m默认结果。
+> 本仓库将树莓派上的调参结果推送到 PI 分支上。以下主要为 main 默认结果。
 
 # 项目简介
 
@@ -21,7 +21,6 @@
 
 * 上位机（Raspberry Pi）负责：
 
-  * 多线程调度
   * 巡逻决策
   * 视觉识别
   * 数据存储与上传
@@ -45,7 +44,6 @@
 *  火灾发现后报警
 *  GPS 定位记录
 *  回巢自动打包上传
-*  支持 PC 仿真闭环测试
 
 ---
 
@@ -67,18 +65,17 @@
 ## 二、软件架构（多线程模型）
 
 系统采用 **生产者-消费者并发模型**，线程之间通过 `ctx` 共享状态与队列。
-
 ### 线程说明
 
 ### 1 Main Thread
 
 * 加载配置
 * 初始化模块
-* 启动各线程
 * 退出（Ctrl+C）
 
 ---
 
+---
 ### 2 Vision Thread（DECTOR）
 
 负责图像采集与目标检测。
@@ -94,7 +91,6 @@
 ---
 
 ### 3 FSM Thread（核心决策层）
-
 * 接收视觉检测结果
 * 接收巡逻建议
 * 输出统一运动指令
@@ -127,14 +123,12 @@
 * 与 FSM 协同完成导航
 
 ---
-
 # GPS 数据链路
 
 ## 下位机上报格式
 
 ```
 GPS,<lat>,<lon>
-```
 
 示例：
 
@@ -163,7 +157,6 @@ P0 → P1 → P2 → ... → PN → P0
 * 计算目标方向
 * 一次性发送旋转指令（L0xxx / R0xxx）
 
-### 2 GO 阶段
 
 * 小步长前进（Fxxxx）
 * 周期性检查偏航
@@ -179,32 +172,20 @@ P0 → P1 → P2 → ... → PN → P0
 ## 1 克隆项目
 
 ```bash
-git clone https://github.com/Wang-yifan666/PI_CAR.git
-cd PI_CAR
-```
 
 ## 2 创建虚拟环境
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
 ---
-
 ## 3 安装依赖
 
 ### PC 调试环境
 
 ```bash
 pip install -r requirements-pc.txt
-```
-
-### 树莓派部署环境
 
 ```bash
 pip install -r requirements-pi.txt
-```
 
 ---
 
@@ -216,25 +197,17 @@ pip install -r requirements-pi.txt
 2. Windows / PC：`config/settings_cpp.yaml` → `config/settings.yaml`
 
 也可通过环境变量强制指定：
-
 ```bash
 PICAR_CONFIG=config/settings.yaml
 ```
 
-两份配置建议分工：
-
-* `config/settings.yaml`：Linux / Pi 实车运行主配置
 * `config/settings_cpp.yaml`：Windows / PC 调试与回放配置
 
 系统配置主要模块包括：
-
 * uart
 * gps
 * dector
 * fsm
-* patrol
-* uploader
-
 建议详细参数说明见：
 
 ```

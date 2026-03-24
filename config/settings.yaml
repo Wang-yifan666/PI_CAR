@@ -73,8 +73,8 @@ fsm:
   patrol_wz_freq : 0.8
   
 uploader : 
-  enable : false                     # 原值: true；未配置真实 endpoint 前建议关闭
-  endpoint : ""                     # 原值: "https://"；上线前替换为真实上传地址
+  enable : true                  
+  endpoint : ""                     # 原值: "https://ultraman.tech/"；上线前替换为真实上传地址
   zip_root : "data"                 # 默认打包根目录
   zip_output_dir : "zips"           # zip 输出目录
   marker_suffix : "uploaded"        # 上传使用
@@ -84,6 +84,12 @@ uploader :
   zip_marker_suffix: ".zipped"      # 打包使用
   zip_include_patterns: null
   zip_exclude_dirs: ["logs", "__pycache__"]
+  zip_split_enable: true           # 由于cloudflare限制单文件大小，开启分片打包
+  zip_max_bytes: 25165824          # 24 MB
+  zip_overhead_bytes: 262144       # 256 KB 安全余量
+  zip_part_name_fmt: "{task_id}.part{part_no:03d}.zip"
+  zip_manifest_per_part: true      # 每个分卷都包含一个 manifest.txt，列出该分卷包含的文件
+  zip_large_file_policy: "error"   # error / skip
 
 # GPS 相关（新增：仅提供巡逻所需最小参数）
 gps:
