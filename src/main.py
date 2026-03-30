@@ -3,7 +3,7 @@ import sys
 import os
 import yaml
 import threading
-import logging 
+import logging
 import re
 
 # 对路径进行配置,保证能正确导入模块
@@ -368,31 +368,125 @@ def _cmd_kind(cmd: str) -> str:
         return "discrete"
 
 # 判断是否为pi，
-def _detect_platform_is_pi() -> tuple[bool, str, str, str]:
-
-    # 两级检测：先尝试创建，再尝试 import
+def _detect_platform_is_pi():
     try:
-        from picamera2 import Picamera2  # type: ignore
+        from picamera2 import Picamera2
+        cam = Picamera2()
         try:
-            _ = Picamera2()
             return True, "ok", "create_ok", ""
-        except Exception as e:
-            return False, "fail", "create_fail", str(e)
+        finally:
+            try:
+                cam.stop()   
+                cam.close()    # 释放摄像头对象，防止占用
+            except Exception:
+                pass
     except Exception as e:
-        return False, "fail", "import_fail", str(e)
+        return False, "fail", "create_fail", str(e)
+
+
+def _status_logger(interval_s: float) -> None:
+    """周期性汇总状态日志，brief=False。"""
+    if interval_s <= 0:
+        interval_s = 15.0
+
+    def _collect_sys(existing: dict) -> tuple:
+        cpu = existing.get("cpu_pct") if isinstance(existing, dict) else None
+        temp = existing.get("temp_c") if isinstance(existing, dict) else None
+        if cpu is None:
+            try:
+                import psutil  # type: ignore
+
+                cpu = psutil.cpu_percent(interval=None)
+            except Exception:
+                try:
+                    load1 = os.getloadavg()[0]
+                    cpu = (load1 / max(os.cpu_count() or 1, 1)) * 100.0
+                except Exception:
+                    cpu = None
+        return cpu, temp
+
+    while not ctx.system_stop_event.wait(interval_s):
+        try:
+            metrics = ctx.get_status_metrics_copy() if hasattr(ctx, "get_status_metrics_copy") else {}
+        except Exception:
+            metrics = {}
+
+        gps = metrics.get("gps", {}) if isinstance(metrics, dict) else {}
+        fps = metrics.get("fps", {}) if isinstance(metrics, dict) else {}
+
+        cpu_pct, temp_c = _collect_sys(fps)
+
+        # 兜底计算 fps，若共享指标中仅有帧数和窗口长度
+        frames_cap = fps.get("frames_capture")
+        frames_inf = fps.get("frames_infer")
+        window_s = fps.get("window_s")
+        fps_cap = fps.get("fps_capture")
+        fps_inf = fps.get("fps_infer")
+        if fps_cap is None and frames_cap is not None and window_s:
+            try:
+                fps_cap = float(frames_cap) / float(window_s)
+            except Exception:
+                fps_cap = None
+        if fps_inf is None and frames_inf is not None and window_s:
+            try:
+                fps_inf = float(frames_inf) / float(window_s)
+            except Exception:
+                fps_inf = None
+
+        key = {
+            # FPS
+            "fps_capture": fps_cap,                 # 捕获端帧率
+            "fps_infer": fps_inf,                   # 推理端帧率
+            "frames_capture": frames_cap,           # 统计窗口内捕获帧数
+            "frames_infer": frames_inf,             # 统计窗口内推理帧数
+            "window_s": window_s,                   # FPS 统计窗口秒数
+            "cost_ms_avg": fps.get("cost_ms_avg"), # 平均单帧耗时(ms)
+            "violations": fps.get("violations"),   # 窗口内检测到的违规数量
+            "backend": fps.get("backend"),         # 推理后端名称
+            "source": fps.get("source"),           # 视频源标识
+
+            # 系统
+            "cpu_pct": cpu_pct,                     # CPU 占用百分比
+            "temp_c": temp_c,                       # 温度(摄氏度)
+
+            # GPS 精度门控
+            "gps_ok": gps.get("ok"),                          # GPS 是否满足精度门限
+            "gps_precision": gps.get("precision"),            # 当前精度(米)
+            "gps_precision_avg": gps.get("precision_avg"),    # 精度滑动平均(米)
+            "gps_valid_ratio": gps.get("valid_ratio"),        # 窗口内有效定位占比
+            "gps_window_size": gps.get("window_size"),        # 精度统计窗口大小
+            "gps_invalid_streak": gps.get("invalid_streak"),  # 连续无效定位计数
+            "gps_invalid_total": gps.get("invalid_total"),    # 累计无效定位次数
+            "gps_threshold_m": gps.get("precision_threshold_m"), # 精度阈值(米)
+            "gps_discard_limit": gps.get("discard_limit"),       # 连续无效上限(超过丢弃)
+        }
+
+        try:
+            log_event(
+                logger,
+                source="INIT",
+                event="status",
+                key=key,
+                brief=False,
+                level=logging.INFO,
+            )
+        except Exception:
+            continue
+
 
 
 def main() :
     is_pi, pf_result, pf_reason, pf_err = _detect_platform_is_pi()
     configure_logging(is_pi=is_pi, enable_cn=None, stage="main")
 
+    log_event(logger, source="INIT", event="hello hello hello", result="ok", key={"cwd": os.getcwd()}, brief=True)
     log_event(
         logger,
         source="INIT",
         event="platform_detect",
         result=pf_result,
         reason=pf_reason,
-        key={"err": pf_err} if pf_err else None,
+        key={"err": pf_err, "is_pi": is_pi, "sys_platform": sys.platform},
         level=logging.WARNING if pf_result == "fail" else logging.INFO,
         brief=None,
     )
@@ -413,6 +507,7 @@ def main() :
     fsm_thread = None
     upload_thread = None
     showcase_thread = None
+    status_thread = None
 
     # 初始化 UART
     uart_cfg = ctx.config.get("uart", {})
@@ -504,8 +599,8 @@ def main() :
             brief=False,
         )
 
-    # 模式分流
-    
+    # 模式
+
     #region M0001
     if selected_mode == "M0001":
         ctx.set_mission(mode="PATROL", selected_mode=selected_mode)
@@ -630,6 +725,60 @@ def main() :
         log_event(logger, source="INIT", event="threads", action="start_bar", result="ok", brief=False)
         dector_thread.start()
         fsm_thread.start()
+
+        # 周期状态日志线程（汇总 fps/system/gps）
+        status_cfg = ctx.config.get("status_log", {}) if hasattr(ctx, "config") else {}
+        status_enable = bool(status_cfg.get("enable", False))
+        status_interval = status_cfg.get("interval_s", None)
+        status_mode = str(status_cfg.get("mode", "fast")).lower()
+
+        if status_interval is None:
+            status_interval = 15.0 if status_mode == "fast" else 60.0
+
+        try:
+            status_interval = float(status_interval)
+        except Exception:
+            status_interval = 15.0
+
+        if status_interval <= 0:
+            status_interval = 15.0
+
+        if status_enable:
+            try:
+                status_thread = threading.Thread(target=_status_logger, args=(status_interval,), daemon=True)
+                status_thread.start()
+                log_event(
+                    logger,
+                    source="INIT",
+                    event="status_log",
+                    action="start",
+                    result="ok",
+                    key={"interval_s": round(status_interval, 2), "mode": status_mode},
+                    brief=False,
+                    level=logging.INFO,
+                )
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="INIT",
+                    event="status_log",
+                    action="start",
+                    result="fail",
+                    reason=str(e),
+                    level=logging.ERROR,
+                    brief=False,
+                )
+        else:
+            log_event(
+                logger,
+                source="INIT",
+                event="status_log",
+                action="start",
+                result="skip",
+                reason="disabled",
+                key={"mode": status_mode},
+                level=logging.DEBUG,
+            )
         
     #endregion
 
@@ -852,6 +1001,12 @@ def main() :
         if upload_thread is not None:
             try:
                 upload_thread.join(timeout=2)
+            except Exception:
+                pass
+
+        if status_thread is not None:
+            try:
+                status_thread.join(timeout=2)
             except Exception:
                 pass
 

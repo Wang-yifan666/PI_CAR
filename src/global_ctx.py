@@ -50,16 +50,18 @@ gps_state = {
     "ok": False ,      # GPS是否正常工作
     "lat": None ,      # 纬度
     "lon": None ,      # 经度
+    "precision": None ,# 定位精度（米）
     "ts": 0.0 ,        # 时间戳
     "source": "unknown" ,    # 
 }
 
 # 写入GPS信号
-def set_gps(lat: float ,  lon: float ,  ok: bool = True ,  source: str = "uart") -> None:
+def set_gps(lat: float ,  lon: float ,  ok: bool = True ,  source: str = "uart", precision: float = None) -> None:
     with _gps_lock:
         gps_state["ok"] = bool(ok)
         gps_state["lat"] = float(lat) if lat is not None else None
         gps_state["lon"] = float(lon) if lon is not None else None
+        gps_state["precision"] = float(precision) if precision is not None else None
         gps_state["ts"] = time.time()
         gps_state["source"] = str(source)
  
@@ -67,6 +69,7 @@ def set_gps(lat: float ,  lon: float ,  ok: bool = True ,  source: str = "uart")
 def set_gps_invalid(source: str = "uart") -> None:
     with _gps_lock:
         gps_state["ok"] = False
+        gps_state["precision"] = None
         gps_state["ts"] = time.time()
         gps_state["source"] = str(source)
         
@@ -74,6 +77,23 @@ def set_gps_invalid(source: str = "uart") -> None:
 def get_gps_copy() -> dict:
     with _gps_lock:
         return dict(gps_state)
+
+# 运行状态指标（FPS / 系统 / GPS 等）
+_metrics_lock = threading.Lock()
+status_metrics = {}
+
+
+def set_status_metrics(section: str, payload: dict) -> None:
+    """Atomically set a metrics section."""
+    if not section:
+        return
+    with _metrics_lock:
+        status_metrics[str(section)] = dict(payload or {})
+
+
+def get_status_metrics_copy() -> dict:
+    with _metrics_lock:
+        return dict(status_metrics)
     
 # 任务的线程锁
 _mission_lock = threading.Lock()

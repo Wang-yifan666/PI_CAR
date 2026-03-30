@@ -73,6 +73,16 @@ class DECTOR_ser( threading.Thread ):
         self._same_obj_px_th = float(log_cfg.get("same_obj_px_th", 20))
         self._same_obj_time_th = float(log_cfg.get("same_obj_time_th", 0.5))
         self._same_obj_iou_th = float(log_cfg.get("same_obj_iou_th", 0.7))
+
+        # 15s 状态窗口统计：采集帧率、推理帧率、平均耗时、违规次数
+        now = time.time()
+        self._status_lock = threading.Lock()
+        self._status_window_s = 15.0
+        self._status_window_start = now
+        self._status_capture_frames = 0
+        self._status_infer_frames = 0
+        self._status_infer_time = 0.0
+        self._status_violations = 0
         
         # 日志报告当前模式
         if not AI_READY:
@@ -108,7 +118,10 @@ class DECTOR_ser( threading.Thread ):
             if SOURCE_TYPE == "PI_CAM":
                 log_event(logger, source="DETECT", event="pi_cam", action="start", result="begin", level=logging.DEBUG, brief=False)
                 self.picam2 = Picamera2()
-                config = self.picam2.create_configuration(main={"size": (640, 640), "format": "RGB888"})
+                # config = self.picam2.create_configuration(main={"size": (640, 640), "format": "RGB888"})
+                config = self.picam2.create_preview_configuration(
+                        main={"size": (640, 640), "format": "RGB888"}
+                )                      # create_configuration 是旧版 API，create_preview_configuration 是新版 API ， 
                 self.picam2.configure(config)
                 self.picam2.start()
 
@@ -173,6 +186,9 @@ class DECTOR_ser( threading.Thread ):
                             res_img = self.result_frame 
                         else :
                             res_img = np.zeros_like(frame)
+
+                    # 采集帧计数（用于周期性状态日志）
+                    self._status_inc_capture()
                         
                     # 降低不同步    
                     if SOURCE_TYPE == "PC_SCREEN":
@@ -212,6 +228,106 @@ class DECTOR_ser( threading.Thread ):
         dist = (dx * dx + dy * dy) ** 0.5
         denom = float(min(W, H)) if min(W, H) > 0 else 1.0
         return dist / denom
+
+    # 统计窗口工具
+    def _status_reset_locked(self, now: float) -> None:
+        self._status_window_start = now
+        self._status_capture_frames = 0
+        self._status_infer_frames = 0
+        self._status_infer_time = 0.0
+        self._status_violations = 0
+
+    def _status_inc_capture(self) -> None:
+        with self._status_lock:
+            self._status_capture_frames += 1
+
+    def _status_inc_infer(self, cost_s: float) -> None:
+        with self._status_lock:
+            self._status_infer_frames += 1
+            self._status_infer_time += max(0.0, float(cost_s))
+
+    def _status_inc_violation(self) -> None:
+        with self._status_lock:
+            self._status_violations += 1
+
+    def _status_maybe_log(self, now: float, *, backend: str) -> None:
+        with self._status_lock:
+            elapsed = now - self._status_window_start
+            if elapsed < self._status_window_s:
+                return
+
+            cap = self._status_capture_frames
+            inf = self._status_infer_frames
+            t_sum = self._status_infer_time
+            vio = self._status_violations
+            window = elapsed if elapsed > 0 else self._status_window_s
+            self._status_reset_locked(now)
+
+        gps = {}
+        try:
+            if hasattr(ctx, "get_gps_copy"):
+                gps = ctx.get_gps_copy() or {}
+            else:
+                gps = getattr(ctx, "gps_state", {}) or {}
+        except Exception:
+            gps = {}
+
+        temp_c, cpu_pct = self._read_sys_metrics()
+
+        fps_capture = cap / window if window > 0 else 0.0
+        fps_infer = inf / window if window > 0 else 0.0
+        cost_ms_avg = (t_sum / inf * 1000.0) if inf > 0 else None
+
+        # 推送到共享指标供状态日志使用
+        try:
+            if hasattr(ctx, "set_status_metrics"):
+                ctx.set_status_metrics(
+                    "fps",
+                    {
+                        "window_s": window,
+                        "frames_capture": cap,
+                        "fps_capture": fps_capture,
+                        "frames_infer": inf,
+                        "fps_infer": fps_infer,
+                        "cost_ms_avg": cost_ms_avg,
+                        "violations": vio,
+                        "backend": backend,
+                        "source": SOURCE_TYPE,
+                        "cpu_pct": cpu_pct,
+                        "temp_c": temp_c,
+                    },
+                )
+        except Exception:
+            pass
+
+        # 不再直接在检测线程打印 FPS 日志，改由主进程周期日志统一输出
+
+    def _read_sys_metrics(self):
+        temp_c = None
+        cpu_pct = None
+
+        # 树莓派温度
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp", "r", encoding="utf-8") as f:
+                raw = f.read().strip()
+                if raw:
+                    temp_c = float(raw) / 1000.0
+        except Exception:
+            temp_c = None
+
+        # CPU 占用（优先 psutil）
+        try:
+            import psutil  # type: ignore
+
+            cpu_pct = psutil.cpu_percent(interval=None)
+        except Exception:
+            try:
+                load1, _load5, _load15 = os.getloadavg()
+                cpu_pct = load1
+            except Exception:
+                cpu_pct = None
+
+        return temp_c, cpu_pct
 
     # 计算loU
     def _calc_iou_xyxy(self, a, b):
@@ -566,6 +682,7 @@ class DECTOR_ser( threading.Thread ):
         # 违规判定（同帧关系：电瓶车 + 插排 近距离）
         violation_ev = self._check_violation_ebike_strip(dets, W, H)
         if violation_ev is not None:
+            self._status_inc_violation()
             log_event(logger, source="DETECT", event="violation", key={"dist_norm": round(violation_ev['dist_norm'],3), "area_norm": round(violation_ev['ebike_area_norm'],3)}, brief=None)
 
             # 存证（保存画框图优先；保存路径写回事件）
@@ -668,6 +785,7 @@ class DECTOR_ser( threading.Thread ):
 
                     # 违规优先：让 FSM 抢占控制权
                     if violation_ev is not None:
+                        self._status_inc_violation()
                         saved_image = msg.get("saved_image")
                         if saved_image:
                             violation_ev.setdefault("artifacts", {})["saved_image"] = saved_image
@@ -681,7 +799,9 @@ class DECTOR_ser( threading.Thread ):
                                 ctx.dector_queue.put_nowait(violation_ev)
                         except Exception as e:
                             log_event(self.logger, source="DETECT", event="process_output", action="queue_put", result="fail", reason="queue_put", key={"err": str(e)}, level=logging.WARNING, brief=False)
-                        continue
+                            self._status_inc_infer(0.0)
+                            self._status_maybe_log(time.time(), backend=self.backend)
+                            continue
 
                     # 否则上报本帧最优检测（面积优先，其次置信度）
                     dets.sort(key=self._area_conf_key, reverse=True)
@@ -695,6 +815,9 @@ class DECTOR_ser( threading.Thread ):
                             ctx.dector_queue.put_nowait(best)
                     except Exception as e:
                         log_event(self.logger, source="DETECT", event="process_output", action="queue_put", result="fail", reason="queue_put", key={"err": str(e)}, level=logging.WARNING, brief=False)
+
+                    self._status_inc_infer(0.0)
+                    self._status_maybe_log(time.time(), backend=self.backend)
 
                 info = self.proc_det._exit_info() if hasattr(self.proc_det, "_exit_info") else None
                 log_event(self.logger, source="DETECT", event="process_exit", action="finish", result="ok", key=info, brief=False)
@@ -767,6 +890,7 @@ class DECTOR_ser( threading.Thread ):
                 try:
                     # 预处理
                     # [修复] 调用函数名改为 _preprocess
+                    t0 = time.time()
                     input_tensor = self._preprocess(current_img)
                     
                     # 推理
@@ -775,6 +899,11 @@ class DECTOR_ser( threading.Thread ):
                     # 后处理
                     img_bgr = cv2.cvtColor(current_img, cv2.COLOR_RGB2BGR)
                     self._yolo_postprocess(outputs, img_bgr)
+
+                    # 统计推理耗时并尝试输出周期状态
+                    cost_s = time.time() - t0
+                    self._status_inc_infer(cost_s)
+                    self._status_maybe_log(time.time(), backend=self.backend)
                     
                 except Exception as e:
                     log_event(logger, source="DETECT", event="inference", result="fail", reason=str(e), level=logging.ERROR, brief=False)
@@ -785,6 +914,7 @@ class DECTOR_ser( threading.Thread ):
         if self.picam2:
             try:
                 self.picam2.stop()
+                self.picam2.close()
                 log_event(logger, source="DETECT", event="shutdown", action="picam2_stop", result="ok", brief=False)
             except Exception as e:
                 log_event(logger, source="DETECT", event="shutdown", action="picam2_stop", result="fail", reason=str(e), level=logging.WARNING, brief=False)

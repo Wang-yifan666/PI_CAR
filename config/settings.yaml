@@ -92,6 +92,14 @@ gps:
   source: "uart"          # uart 表示来自 STM32 串口输出：GPS,lat,lon
   stale_timeout_s: 2.0    # 超过多少秒未更新就认为 GPS 失效（由 gps_service 判定）
   log_every_s: 2.0        # GPS 日志节流（秒）
+  precision_threshold_m: 5.0   # 精度阈值（米），超过则视为无效
+  discard_limit: 3            # 连续无效多少次后触发停驶并标记 GPS 失效
+
+# 周期状态日志
+status_log:
+  enable: true
+  mode: "fast"            # fast ≈15s，slow ≈60s；若设置 interval_s 则优先生效
+  interval_s: null        # 自定义周期（秒），为空时按 mode 选择
 
 # 巡逻相关
 patrol:
@@ -125,10 +133,10 @@ showcase:
     # - cmd: F0002
     #   duration: 2.0
     #   note: forward_1
-    - cmd: F0002
+    - cmd: F0004
       duration: 2.1
       note: forward_1
-    - cmd: HL002
+    - cmd: HL004
       duration: 2.1
       note: right_turn_1
     - cmd: B0002
@@ -136,7 +144,13 @@ showcase:
       note: forward_2
     - cmd: HR002
       duration: 2.1
-      note: right_turn_2
+      note: left_turn_1
+    - cmd: B0002
+      duration: 2.1
+      note: forward_3
+    - mcd: HR002
+      duration: 2.1
+      note: right_turn_1
     # - cmd: S
     #   duration: 0.3
     #   note: stop

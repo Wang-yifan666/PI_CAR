@@ -1,6 +1,7 @@
 import threading
 import time
 import logging
+from collections import deque
 
 import src.global_ctx as ctx
 from src.utils.logger import sys_logger as logger, log_event
@@ -31,6 +32,29 @@ class GPSService(threading.Thread) :
         if self.log_every_s <= 0:
             self.log_every_s = 2.0
 
+        # 精度门控
+        self.precision_threshold_m = float(cfg.get("precision_threshold_m", 5.0))
+        if self.precision_threshold_m <= 0:
+            self.precision_threshold_m = 5.0
+
+        self.discard_limit = int(cfg.get("discard_limit", 3))
+        if self.discard_limit <= 0:
+            self.discard_limit = 3
+
+        # 统计窗口
+        self.window_size = int(cfg.get("window_size", 30))
+        if self.window_size <= 0:
+            self.window_size = 30
+        self._precision_window = deque(maxlen=self.window_size)
+        self._total_received = 0
+        self._invalid_total = 0
+        self._invalid_streak = 0
+        self._stop_sent = False
+
+        # UART 交互节流
+        self._last_status_query_ts = 0.0
+        self._status_query_min_interval = 0.2
+
         # 内部状态
         self._last_log_ts = 0.0
         self._callback_bound = False
@@ -49,25 +73,66 @@ class GPSService(threading.Thread) :
         )
         
     # UART 回调
-    def _on_gps(self , lat : float , lon : float ) : 
+    def _on_gps(self , lat : float , lon : float , precision: float = None ) : 
         try : 
-            if hasattr(ctx, "set_gps"):
-                ctx.set_gps( lat = lat , lon = lon , ok = True , source = self.source )
-            else:
-                # 兜底：没有 set_gps 也保证有状态可读
-                ctx.gps_state = {
-                    "ok": True,
-                    "lat": float(lat),
-                    "lon": float(lon),
-                    "ts": time.time(),
-                    "source": self.source,
-                }
-                
+            self._total_received += 1
             now = time.time()
+
+            precision_val = None
+            try:
+                precision_val = float(precision) if precision is not None else None
+            except Exception:
+                precision_val = None
+
+            is_valid = (precision_val is not None) and (precision_val <= self.precision_threshold_m)
+
+            # 更新窗口
+            self._precision_window.append({
+                "valid": bool(is_valid),
+                "precision": precision_val,
+                "ts": now,
+            })
+
+            if is_valid:
+                # 恢复
+                self._invalid_streak = 0
+                self._stop_sent = False
+
+                if hasattr(ctx, "set_gps"):
+                    ctx.set_gps(lat=lat, lon=lon, ok=True, source=self.source, precision=precision_val)
+                else:
+                    ctx.gps_state = {
+                        "ok": True,
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "precision": precision_val,
+                        "ts": now,
+                        "source": self.source,
+                    }
+            else:
+                self._invalid_total += 1
+                self._invalid_streak += 1
+
+                # 标记状态为无效定位（不直接置 ok=false，仅保持统计）
+                self._maybe_query_status(now)
+
+                if (self._invalid_streak >= self.discard_limit) and (not self._stop_sent):
+                    self._stop_sent = True
+                    self._emit_uart("S", reason="gps_precision_fail")
+                    # 标记 GPS 无效，暂停巡逻
+                    if hasattr(ctx, "set_gps_invalid"):
+                        ctx.set_gps_invalid(source=self.source)
+
+            # 周期日志
             if ( now - self._last_log_ts ) >= self.log_every_s :
                 self._last_log_ts = now 
-                log_event(logger, source="GPS", event="update", key={"lat": round(float(lat),7), "lon": round(float(lon),7)}, level=logging.DEBUG)
-                
+                key = {"lat": round(float(lat),7), "lon": round(float(lon),7), "ok": is_valid}
+                if precision_val is not None:
+                    key["precision"] = round(precision_val, 2)
+                log_event(logger, source="GPS", event="update", key=key, level=logging.DEBUG)
+
+            self._publish_metrics()
+
         except Exception as e :
             log_event(logger, source="GPS", event="update", result="fail", reason=str(e), level=logging.ERROR, brief=False)
     
@@ -92,6 +157,56 @@ class GPSService(threading.Thread) :
         except Exception as e:
             log_event(logger, source="GPS", event="bind_callback", result="fail", reason=str(e), level=logging.ERROR, brief=False)
             return False 
+
+    def _maybe_query_status(self, now: float) -> None:
+        if not getattr(ctx, "uart", None):
+            return
+        if (now - self._last_status_query_ts) < self._status_query_min_interval:
+            return
+        self._last_status_query_ts = now
+        try:
+            if hasattr(ctx, "put_latest"):
+                ctx.put_latest(ctx.uart_queue, "STATUS")
+            else:
+                ctx.uart_queue.put_nowait("STATUS")
+            log_event(logger, source="GPS", event="status_query", action="precision_fail", key={"streak": self._invalid_streak}, level=logging.DEBUG)
+        except Exception as e:
+            log_event(logger, source="GPS", event="status_query", result="fail", reason=str(e), level=logging.WARNING)
+
+    def _emit_uart(self, cmd: str, reason: str) -> None:
+        try:
+            if hasattr(ctx, "put_latest"):
+                ctx.put_latest(ctx.uart_queue, cmd)
+            else:
+                ctx.uart_queue.put_nowait(cmd)
+            log_event(logger, source="GPS", event="uart_emit", action=reason, key={"cmd": cmd, "streak": self._invalid_streak}, level=logging.INFO)
+        except Exception as e:
+            log_event(logger, source="GPS", event="uart_emit", result="fail", reason=str(e), key={"cmd": cmd}, level=logging.ERROR, brief=False)
+
+    def _publish_metrics(self) -> None:
+        try:
+            window = list(self._precision_window)
+            if not window:
+                return
+
+            valid_count = sum(1 for x in window if x.get("valid"))
+            precision_vals = [x.get("precision") for x in window if x.get("precision") is not None and x.get("valid")]
+            avg_precision = sum(precision_vals) / len(precision_vals) if precision_vals else None
+            payload = {
+                "ok": bool((window[-1]).get("valid")),
+                "precision": window[-1].get("precision"),
+                "precision_avg": avg_precision,
+                "valid_ratio": (valid_count / len(window)) if len(window) > 0 else None,
+                "window_size": len(window),
+                "invalid_streak": self._invalid_streak,
+                "invalid_total": self._invalid_total,
+                "precision_threshold_m": self.precision_threshold_m,
+                "discard_limit": self.discard_limit,
+            }
+            if hasattr(ctx, "set_status_metrics"):
+                ctx.set_status_metrics("gps", payload)
+        except Exception:
+            pass
     
     # 检查是否过期    
     def _check_stale_and_mark_invalid(self) : 

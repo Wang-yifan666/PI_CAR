@@ -114,6 +114,10 @@ class STM32Communicator:
         self.log_tx_cmd = bool(cfg.get("log_tx_cmd", True))
         self.log_gps = bool(cfg.get("log_gps", True))
 
+        # ERR 后自动查询状态的最小间隔（秒），避免刷屏
+        self.state_after_err_min_interval = float(cfg.get("state_after_err_min_interval", 1.0))
+        self._last_state_after_err_ts = 0.0
+
         self.ser = None
         self.running = False
         self.response_callback = None
@@ -183,7 +187,7 @@ class STM32Communicator:
         self.response_callback = callback
         
     # 设置GPS数据回调函数
-    def set_gps_callback(self, callback: Callable[[float, float], None]):
+    def set_gps_callback(self, callback: Callable[..., None]):
         self.gps_callback = callback
         
     # 启动接收线程 
@@ -270,6 +274,7 @@ class STM32Communicator:
                 self._resp_event.set()
                 if self.response_callback:
                     self.response_callback(self._resp_result)
+                self._request_status_after_err(err_code=error_code, err_line=line)
                 return
         
         # 普通命令响应，通过回调处理
@@ -279,6 +284,7 @@ class STM32Communicator:
                     error_code = int(line[3:5])
                     response = STM32Response(False, error_code, [line], line)
                     self.response_callback(response)
+                    self._request_status_after_err(err_code=error_code, err_line=line)
                 except ValueError:
                     pass
             elif line == "OK":
@@ -287,25 +293,102 @@ class STM32Communicator:
             else:
                 response = STM32Response(True, 0, [line], line)
                 self.response_callback(response)
+
+    def _request_status_after_err(self, err_code: int = 0, err_line: str = "") -> None:
+        """After receiving ERR, query STATUS once (debounced) and log parsed state."""
+        now = time.time()
+        if (now - getattr(self, "_last_state_after_err_ts", 0.0)) < self.state_after_err_min_interval:
+            return
+
+        self._last_state_after_err_ts = now
+
+        def _worker():
+            try:
+                resp = self.send_command("STATUS", wait_for_response=True, timeout=self.cmd_timeout)
+
+                if resp and getattr(resp, "success", False):
+                    status = self._parse_status_response(resp.data_lines)
+                    motors = [
+                        {
+                            "id": m.motor_id,
+                            "trpm": m.target_rpm,
+                            "arpm": m.actual_rpm,
+                            "cnt": m.encoder_count,
+                        }
+                        for m in (status.motors or [])
+                    ] if status else []
+
+                    log_event(
+                        logger,
+                        source="UART",
+                        event="state_after_err",
+                        result="ok",
+                        key={
+                            "err_code": err_code,
+                            "err_line": err_line,
+                            "active": getattr(status, "active", False),
+                            "timed": getattr(status, "timed", False),
+                            "servo_ang": getattr(status, "servo_angle", None),
+                            "servo_busy": getattr(status, "servo_busy", None),
+                            "motors": motors,
+                        },
+                        brief=False,
+                    )
+                else:
+                    log_event(
+                        logger,
+                        source="UART",
+                        event="state_after_err",
+                        result="fail",
+                        reason="status_timeout_or_err",
+                        key={"err_code": err_code, "err_line": err_line},
+                        level=logging.WARNING,
+                        brief=False,
+                    )
+
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="UART",
+                    event="state_after_err",
+                    result="fail",
+                    reason=str(e),
+                    key={"err_code": err_code, "err_line": err_line},
+                    level=logging.ERROR,
+                    brief=False,
+                )
+
+        threading.Thread(target=_worker, daemon=True).start()
                 
     # 处理GPS数据
     def _process_gps_data(self, line: str):
-        
         try:
             parts = line.split(',')
             if len(parts) >= 3:
                 lat_str = parts[1]
                 lon_str = parts[2]
-                
+                pre = None
+                if len(parts) >= 4:
+                    try:
+                        pre = float(parts[3])
+                    except Exception:
+                        pre = None
+
                 if lat_str != "NA" and lon_str != "NA":
                     lat = float(lat_str)
                     lon = float(lon_str)
-                    
+
                     if self.gps_callback:
-                        self.gps_callback(lat, lon)
-                    else:
-                        if self.log_gps:
-                            log_event(logger, source="UART", event="gps", key={"lat": round(lat,7), "lon": round(lon,7)}, level=logging.DEBUG)
+                        try:
+                            self.gps_callback(lat, lon, pre)
+                        except TypeError:
+                            # 兼容旧签名
+                            self.gps_callback(lat, lon)
+                    elif self.log_gps:
+                        key = {"lat": round(lat, 7), "lon": round(lon, 7)}
+                        if pre is not None:
+                            key["precision"] = round(pre, 2)
+                        log_event(logger, source="UART", event="gps", key=key, level=logging.DEBUG)
                 else:
                     log_event(logger, source="UART", event="gps", result="missing", level=logging.WARNING)
         except Exception as e:

@@ -116,12 +116,71 @@ def _write_manifest(manifest_path: str,
     with open(manifest_path , "w" , encoding="utf-8") as f :
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-# 打包变成zip文件
-def build_zip(task: zips,
-              zip_output_dir : Optional[str] = None,
-              include_patterns : Optional[List[str]] = None,
-              exclude_dirs : Optional[List[str]] = None,
-              marker_suffix : str = ".zipped") -> str:
+# 计算单个文件的大小是否超过限制
+def _zip_payload_limit_bytes(cfg: Optional[Dict[str, object]] = None ) -> int :
+    cfg = cfg or {}
+    max_bytes = int( cfg.get("zip_max_bytes", 20 * 1024 * 1024) )  # 默认20MB
+    overhead = int( cfg.get("zip_overhead_bytes", 256 * 1024) )   # 默认256KB的安全余量
+    
+    limit = max_bytes - overhead
+    if limit <= 0:
+        raise ValueError("zip payload limit must be > 0")     # 安全检查
+    return limit
+    
+# 生成分卷的zip文件名
+def _zip_part_name(task_id: str , part_no: int , fmt: str ) -> str :
+    fmt = ( fmt or "{task_id}.part{part_no:03d}.zip" ).strip()
+    
+    return fmt.format( task_id = task_id , part_no = part_no )
+
+# 根据文件列表和大小限制，规划分卷方案
+def _plan_zip_parts(
+    file_rows: List[Tuple[str, int, str]],
+    limit_bytes: int,
+    large_file_policy: str = "error",
+) -> List[List[Tuple[str, int, str]]]:
+    parts: List[List[Tuple[str, int, str]]] = []
+    current: List[Tuple[str, int, str]] = []
+    current_size = 0
+
+    for row in file_rows:
+        rel, size, sha256 = row
+
+        if size > limit_bytes:
+            if large_file_policy == "skip":
+                log_event(
+                    logger,
+                    source="ZIP",
+                    event="zip_part_skip",
+                    result="skip",
+                    reason="single_file_oversize",
+                    key={"file": rel, "size": size, "limit": limit_bytes},
+                    level=logging.WARNING,
+                )
+                continue
+            raise RuntimeError(f"single file oversize: {rel} size={size} limit={limit_bytes}")
+
+        if current and (current_size + size > limit_bytes):
+            parts.append(current)
+            current = []
+            current_size = 0
+
+        current.append(row)
+        current_size += size
+
+    if current:
+        parts.append(current)
+
+    return parts
+
+# 打包为若干个 zip 文件，并生成对应的 marker 文件和 manifest 文件
+def build_zip(
+    task: zips,
+    zip_output_dir: Optional[str] = None,
+    include_patterns: Optional[List[str]] = None,
+    exclude_dirs: Optional[List[str]] = None,
+    marker_suffix: str = ".zipped",
+) -> List[str]:
     cfg = {}
     try:
         cfg = (ctx.config or {}).get("uploader", {})
@@ -144,33 +203,63 @@ def build_zip(task: zips,
     # include/exclude
     if include_patterns is None:
         include_patterns = cfg.get("zip_include_patterns") or None
-
     if exclude_dirs is None:
         exclude_dirs = cfg.get("zip_exclude_dirs") or []
 
+    zip_split_enable = bool(cfg.get("zip_split_enable", True))
+    zip_part_name_fmt = str(
+        cfg.get("zip_part_name_fmt", "{task_id}.part{part_no:03d}.zip")
+    ).strip() or "{task_id}.part{part_no:03d}.zip"
+    zip_large_file_policy = str(cfg.get("zip_large_file_policy", "error")).strip().lower() or "error"
+
     t0 = time.time()
-    
     root = os.path.abspath(task.root_path)
 
     # 将输出目录解析成“项目根目录下的绝对路径”
     zip_output_dir = _resolve_dir(zip_output_dir)
+    _mkdir(zip_output_dir)
 
-    _mkdir( zip_output_dir )
-    
-    zip_name = f"{task.task_id}.zip"
-    zip_path = os.path.join(zip_output_dir , zip_name)
-    marker_path = zip_path + marker_suffix
-    
-    log_event(logger, source="ZIP", event="zip_create", action="start", result="begin", key={"root": root}, ids={"task": task.task_id}, brief=False)
-    log_event(logger, source="ZIP", event="config", key={"include_patterns": include_patterns, "exclude_dirs": exclude_dirs}, level=logging.DEBUG)
-    log_event(logger, source="ZIP", event="output", key={"output_dir": zip_output_dir, "zip_path": zip_path}, level=logging.DEBUG)
-    
-    files = list(_iter_files(root , include_patterns =include_patterns , exclude_dirs = exclude_dirs))
-    log_event(logger, source="ZIP", event="files_collected", key={"count": len(files)}, level=logging.DEBUG)
-    
-    tmp_manifest = os.path.join(zip_output_dir, f".manifest_{task.task_id}_{_now_time()}.json")
+    log_event(
+        logger,
+        source="ZIP",
+        event="zip_create",
+        action="start",
+        result="begin",
+        key={"root": root},
+        ids={"task": task.task_id},
+        brief=False,
+    )
+    log_event(
+        logger,
+        source="ZIP",
+        event="config",
+        key={
+            "include_patterns": include_patterns,
+            "exclude_dirs": exclude_dirs,
+            "zip_split_enable": zip_split_enable,
+            "zip_part_name_fmt": zip_part_name_fmt,
+            "zip_large_file_policy": zip_large_file_policy,
+        },
+        level=logging.DEBUG,
+    )
+    log_event(
+        logger,
+        source="ZIP",
+        event="output",
+        key={"output_dir": zip_output_dir},
+        level=logging.DEBUG,
+    )
+
+    files = list(_iter_files(root, include_patterns=include_patterns, exclude_dirs=exclude_dirs))
+    log_event(
+        logger,
+        source="ZIP",
+        event="files_collected",
+        key={"count": len(files)},
+        level=logging.DEBUG,
+    )
+
     file_rows: List[Tuple[str, int, str]] = []
-    
     for p in files:
         rel = os.path.relpath(p, root).replace("\\", "/")
         try:
@@ -178,68 +267,192 @@ def build_zip(task: zips,
             sha256 = _sha256_file(p)
             file_rows.append((rel, size, sha256))
         except Exception as e:
-            log_event(logger, source="ZIP", event="file_hash", result="fail", reason=str(e), key={"file": p}, level=logging.ERROR)
-        
-        
-    try:
-        _write_manifest(tmp_manifest, task, root, file_rows)
-        log_event(logger, source="ZIP", event="manifest", result="ok", key={"tmp": tmp_manifest}, level=logging.DEBUG)
+            log_event(
+                logger,
+                source="ZIP",
+                event="file_hash",
+                result="fail",
+                reason=str(e),
+                key={"file": p},
+                level=logging.ERROR,
+            )
 
-        # 写 zip
-        with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-            # 先写业务文件
-            for p in files:
-                arcname = os.path.relpath(p, root).replace("\\", "/")
-                try:
-                    zf.write(p, arcname=arcname)
-                except Exception as e:
-                    log_event(logger, source="ZIP", event="zip_write", result="fail", reason=str(e), key={"file": p, "arcname": arcname}, level=logging.ERROR)
+    limit_bytes = _zip_payload_limit_bytes(cfg)
 
-            # 再写 manifest 到 zip 根目录
-            zf.write(tmp_manifest, arcname="manifest.json")
+    if zip_split_enable:
+        parts = _plan_zip_parts(
+            file_rows=file_rows,
+            limit_bytes=limit_bytes,
+            large_file_policy=zip_large_file_policy,
+        )
+    else:
+        parts = [file_rows]
 
-        # marker
-        try:
-            with open(marker_path, "w", encoding="utf-8") as f:
-                f.write(datetime.now().isoformat(timespec="seconds"))
-            log_event(logger, source="ZIP", event="marker", result="ok", key={"marker": marker_path}, level=logging.DEBUG)
-        except Exception as e:
-            log_event(logger, source="ZIP", event="marker", result="fail", reason=str(e), level=logging.ERROR)
+    log_event(
+        logger,
+        source="ZIP",
+        event="zip_plan",
+        result="ok",
+        key={
+            "parts": len(parts),
+            "limit_bytes": limit_bytes,
+            "split_enable": zip_split_enable,
+        },
+        ids={"task": task.task_id},
+        brief=False,
+    )
 
-        # 总结日志
-        zip_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else -1
-        elapsed = time.time() - t0
+    zip_paths: List[str] = []
+    part_count = len(parts)
+
+    for idx, part_rows in enumerate(parts, start=1):
+        zip_name = _zip_part_name(task.task_id, idx, zip_part_name_fmt)
+        zip_path = os.path.join(zip_output_dir, zip_name)
+        marker_path = zip_path + marker_suffix
+        tmp_manifest = os.path.join(
+            zip_output_dir,
+            f".manifest_{task.task_id}_part{idx:03d}_{_now_time()}.json"
+        )
+
         log_event(
             logger,
             source="ZIP",
-            event="zip_create",
-            action="finish",
-            result="ok",
-            key={"zip_size_bytes": zip_size, "files": len(files), "elapsed_s": round(elapsed,2)},
+            event="zip_part_open",
+            result="begin",
+            key={
+                "part_no": idx,
+                "part_count": part_count,
+                "zip_path": zip_path,
+            },
             ids={"task": task.task_id},
-            brief=True,
+            level=logging.DEBUG,
         )
 
-        return zip_path
-
-    finally:
-        # 清理临时manifest
         try:
-            if os.path.exists(tmp_manifest):
-                os.remove(tmp_manifest)
-                log_event(logger, source="ZIP", event="manifest", action="cleanup", key={"tmp": tmp_manifest}, level=logging.DEBUG)
-        except Exception:
-            pass    
- 
+            part_meta = dict(task.meta or {})
+            part_meta.update({
+                "part_no": idx,
+                "part_count": part_count,
+            })
+            part_task = zips(
+                root_path=task.root_path,
+                task_id=task.task_id,
+                meta=part_meta,
+            )
+
+            _write_manifest(tmp_manifest, part_task, root, part_rows)
+            log_event(
+                logger,
+                source="ZIP",
+                event="manifest",
+                result="ok",
+                key={"tmp": tmp_manifest, "part_no": idx},
+                level=logging.DEBUG,
+            )
+
+            with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for rel, _, _ in part_rows:
+                    p = os.path.join(root, rel.replace("/", os.sep))
+                    arcname = rel
+                    try:
+                        zf.write(p, arcname=arcname)
+                    except Exception as e:
+                        log_event(
+                            logger,
+                            source="ZIP",
+                            event="zip_write",
+                            result="fail",
+                            reason=str(e),
+                            key={"file": p, "arcname": arcname, "part_no": idx},
+                            level=logging.ERROR,
+                        )
+
+                # 每个分片都写一个 manifest.json
+                zf.write(tmp_manifest, arcname="manifest.json")
+
+            try:
+                with open(marker_path, "w", encoding="utf-8") as f:
+                    f.write(datetime.now().isoformat(timespec="seconds"))
+                log_event(
+                    logger,
+                    source="ZIP",
+                    event="marker",
+                    result="ok",
+                    key={"marker": marker_path, "part_no": idx},
+                    level=logging.DEBUG,
+                )
+            except Exception as e:
+                log_event(
+                    logger,
+                    source="ZIP",
+                    event="marker",
+                    result="fail",
+                    reason=str(e),
+                    key={"marker": marker_path, "part_no": idx},
+                    level=logging.ERROR,
+                )
+
+            zip_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else -1
+            zip_paths.append(zip_path)
+
+            log_event(
+                logger,
+                source="ZIP",
+                event="zip_part_close",
+                result="ok",
+                key={
+                    "part_no": idx,
+                    "part_count": part_count,
+                    "zip_path": zip_path,
+                    "zip_size_bytes": zip_size,
+                    "files": len(part_rows),
+                },
+                ids={"task": task.task_id},
+                brief=True,
+            )
+
+        finally:
+            try:
+                if os.path.exists(tmp_manifest):
+                    os.remove(tmp_manifest)
+                    log_event(
+                        logger,
+                        source="ZIP",
+                        event="manifest",
+                        action="cleanup",
+                        key={"tmp": tmp_manifest, "part_no": idx},
+                        level=logging.DEBUG,
+                    )
+            except Exception:
+                pass
+
+    elapsed = time.time() - t0
+    log_event(
+        logger,
+        source="ZIP",
+        event="zip_create",
+        action="finish",
+        result="ok",
+        key={
+            "parts": len(zip_paths),
+            "files": len(file_rows),
+            "elapsed_s": round(elapsed, 2),
+        },
+        ids={"task": task.task_id},
+        brief=True,
+    )
+    return zip_paths
+
 # 快速函数
-def build_zip_for_data(task_id: Optional[str] = None,
-                       meta: Optional[Dict[str, str]] = None,
-                       **kwargs) -> str:
+def build_zip_for_data(
+    task_id: Optional[str] = None,
+    meta: Optional[Dict[str, str]] = None,
+    **kwargs
+) -> List[str]:
     if task_id is None:
         task_id = f"DATA_{_now_time()}"
     task = zips(root_path="data", task_id=task_id, meta=meta or {})
     return build_zip(task, **kwargs)
-
 
 # 将 zip 任务入队等待上传
 def enqueue_upload(zip_path: str, meta: Optional[Dict[str, str]] = None) -> bool:
