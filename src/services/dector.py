@@ -597,7 +597,59 @@ class DECTOR_ser( threading.Thread ):
         # 保存画好的图供显示
         with self.frame_lock:
             self.result_frame = draw_img
-        
+
+    # 检测物体
+    def _log_object_if_needed(self, det: dict):
+        class_id = int(det.get("class_id", -1))
+        class_name = str(det.get("class_name", ""))
+        conf = float(det.get("conf", 0.0))
+        bbox = det.get("bbox_xyxy") or [0, 0, 0, 0]
+        center = det.get("center") or [0, 0]
+        now = float(det.get("ts", time.time()))
+
+        if len(bbox) < 4 or len(center) < 2:
+            return
+
+        x1, y1, x2, y2 = map(int, bbox[:4])
+        cx_i, cy_i = int(center[0]), int(center[1])
+
+        should_log = True
+
+        if self._log_dedup_enable:
+            key = class_id
+            last = self._last_logged.get(key)
+
+            if last is not None:
+                lx, ly, lts, lbox = last
+                dt = now - lts
+                dist = ((cx_i - lx) ** 2 + (cy_i - ly) ** 2) ** 0.5
+                iou = self._calc_iou_xyxy([x1, y1, x2, y2], lbox)
+
+                same_obj = (
+                    ((iou >= self._same_obj_iou_th) or (dist < self._same_obj_px_th))
+                    and (dt < self._same_obj_time_th)
+                )
+                should_log = not same_obj
+
+            if should_log:
+                self._last_logged[key] = (cx_i, cy_i, now, [x1, y1, x2, y2])
+
+        if should_log:
+            log_event(
+                self.logger,
+                source="DETECT",
+                event="object",
+                key={
+                    "label": class_name,
+                    "class_id": class_id,
+                    "conf": round(conf, 2),
+                    "center": [cx_i, cy_i],
+                    "bbox": [x1, y1, x2, y2],
+                },
+                level=logging.DEBUG,
+                brief=False,
+            )
+
     # 运行
     def run(self):
         # boot 日志
@@ -649,17 +701,20 @@ class DECTOR_ser( threading.Thread ):
                         cx = int((x1_i + x2_i) / 2)
                         cy = int((y1_i + y2_i) / 2)
 
-                        dets.append({
-                            "type": "detection",
-                            "class_id": int(d.get("class_id", -1)),
-                            "class_name": d.get("cls", d.get("class_name", "")),
-                            "conf": float(d.get("conf", 0.0)),
-                            "bbox_xyxy": [x1_i, y1_i, x2_i, y2_i],
-                            "center": [cx, cy],
-                            "area": int(area),
-                            "img_size": [int(W), int(H)],
-                            "ts": float(msg.get("ts", time.time())),
-                        })
+                    det = {
+                        "type": "detection",
+                        "class_id": int(d.get("class_id", -1)),
+                        "class_name": d.get("cls", d.get("class_name", "")),
+                        "conf": float(d.get("conf", 0.0)),
+                        "bbox_xyxy": [x1_i, y1_i, x2_i, y2_i],
+                        "center": [cx, cy],
+                        "area": int(area),
+                        "img_size": [int(W), int(H)],
+                        "ts": float(msg.get("ts", time.time())),
+                    }
+                    dets.append(det)
+
+                    self._log_object_if_needed(det)
 
                     if not dets:
                         continue
@@ -798,3 +853,4 @@ class DECTOR_ser( threading.Thread ):
                 log_event(logger, source="DETECT", event="shutdown", action="cv2_destroy", result="fail", reason=str(e), level=logging.WARNING, brief=False)
                 
         log_event(logger, source="DETECT", event="stop_request", result="ok", brief=False)
+       
