@@ -27,6 +27,8 @@ dector :
   target_classes : [0 , 1 , 2]   # 需要检测的类别
 
   show_window : false  # 原值: true；
+  pi_video_open: true  # Pi 摄像头画面通过 SSH 传输到电脑上，供调试用
+  window_mode: "autosize"   # autosize 更稳，避免 X11 全屏/缩放导致的崩溃
 
   backend: "ncnn"      # onnx\process
 
@@ -49,10 +51,16 @@ dector :
     same_obj_time_th: 1         # 在该时间窗口内被认为同一个物体
     same_obj_iou_th: 0          # IoU 大于该值认为同一个目标
 
+  object_log:                   # 检测目标日志
+    enable: true                # 是否记录检测日志
+    every_detection: true       # true=每次检测都打日志；false=按 log_dedup 去重
+    level: "INFO"               # DEBUG/INFO/WARNING/ERROR/CRITICAL
+    brief: true                 # true 时会进入 logs_be（简版日志）
+
   process:
     exec_path: "detector_cpp/build/detector_ncnn" # 原值: "D:\\PI_CAR\\detector_cpp\\build\\Release\\detector_ncnn.exe"
     args: []
-    opencv_bin: ""           # Windows 可选，若设置则自动加入 PATH
+    opencv_bin: ""          
   
 # fsm相关
 fsm:
@@ -65,6 +73,11 @@ fsm:
 
   stop_cmd: "S"
 
+  # 火警策略
+  fire_enable: true
+  fire_conf_threshold: 0.40
+  return_to_base: true
+
   desired_area_norm : 0.08
 
   # 巡逻策略
@@ -73,8 +86,8 @@ fsm:
   patrol_wz_freq : 0.8
   
 uploader : 
-  enable : false                    # 原值: true；未配置真实 endpoint 前建议关闭
-  endpoint : ""                     # 原值: "https://"；上线前替换为真实上传地址
+  enable : true                  
+  endpoint : "https://ultraman.tech/"  
   zip_root : "data"                 # 默认打包根目录
   zip_output_dir : "zips"           # zip 输出目录
   marker_suffix : "uploaded"        # 上传使用
@@ -84,6 +97,12 @@ uploader :
   zip_marker_suffix: ".zipped"      # 打包使用
   zip_include_patterns: null
   zip_exclude_dirs: ["logs", "__pycache__"]
+  zip_split_enable: true           # 由于cloudflare限制单文件大小，开启分片打包
+  zip_max_bytes: 25165824          # 24 MB
+  zip_overhead_bytes: 262144       # 256 KB 安全余量
+  zip_part_name_fmt: "{task_id}.part{part_no:03d}.zip"
+  zip_manifest_per_part: true      # 每个分卷都包含一个 manifest.txt，列出该分卷包含的文件
+  zip_large_file_policy: "error"   # error / skip
 
 # GPS 相关（新增：仅提供巡逻所需最小参数）
 gps:
@@ -93,11 +112,12 @@ gps:
   stale_timeout_s: 2.0    # 超过多少秒未更新就认为 GPS 失效（由 gps_service 判定）
   log_every_s: 2.0        # GPS 日志节流（秒）
   precision_threshold_m: 5.0   # 精度阈值（米），超过则视为无效
-  discard_limit: 3            # 连续无效多少次后触发停驶并标记 GPS 失效
+  discard_limit: 3             # 连续无效多少次后触发停驶并标记 GPS 失效
 
 # 周期状态日志
-status_log:
+status_log: 
   enable: true
+  debug: true             # 开启后会将周期日志的 brief 设为 true
   mode: "fast"            # fast ≈15s，slow ≈60s；若设置 interval_s 则优先生效
   interval_s: null        # 自定义周期（秒），为空时按 mode 选择
 

@@ -20,7 +20,7 @@ from src.core.patrol_logic import PatrolService
 from src.core.fsm import FSMService
 from src.services.uploader import UploadService
 
-from src.utils.logger import sys_logger as logger, configure_logging, log_event
+from src.utils.logger import sys_logger as logger, log_event
 from src.mode.showcase import ShowcaseMode
 
 
@@ -384,8 +384,8 @@ def _detect_platform_is_pi():
         return False, "fail", "create_fail", str(e)
 
 
-def _status_logger(interval_s: float) -> None:
-    """周期性汇总状态日志，brief=False。"""
+def _status_logger(interval_s: float, status_brief: bool = False) -> None:
+    """周期性汇总状态日志；status_brief=True 时同步写入 brief。"""
     if interval_s <= 0:
         interval_s = 15.0
 
@@ -467,7 +467,7 @@ def _status_logger(interval_s: float) -> None:
                 source="INIT",
                 event="status",
                 key=key,
-                brief=False,
+                brief=status_brief,
                 level=logging.INFO,
             )
         except Exception:
@@ -477,7 +477,6 @@ def _status_logger(interval_s: float) -> None:
 
 def main() :
     is_pi, pf_result, pf_reason, pf_err = _detect_platform_is_pi()
-    configure_logging(is_pi=is_pi, enable_cn=None, stage="main")
 
     log_event(logger, source="INIT", event="hello hello hello", result="ok", key={"cwd": os.getcwd()}, brief=True)
     log_event(
@@ -731,6 +730,7 @@ def main() :
         status_enable = bool(status_cfg.get("enable", False))
         status_interval = status_cfg.get("interval_s", None)
         status_mode = str(status_cfg.get("mode", "fast")).lower()
+        status_brief_true = bool(status_cfg.get("debug", False))
 
         if status_interval is None:
             status_interval = 15.0 if status_mode == "fast" else 60.0
@@ -745,7 +745,11 @@ def main() :
 
         if status_enable:
             try:
-                status_thread = threading.Thread(target=_status_logger, args=(status_interval,), daemon=True)
+                status_thread = threading.Thread(
+                    target=_status_logger,
+                    args=(status_interval, status_brief_true),
+                    daemon=True,
+                )
                 status_thread.start()
                 log_event(
                     logger,
@@ -754,7 +758,7 @@ def main() :
                     action="start",
                     result="ok",
                     key={"interval_s": round(status_interval, 2), "mode": status_mode},
-                    brief=False,
+                    brief=status_brief_true,
                     level=logging.INFO,
                 )
             except Exception as e:

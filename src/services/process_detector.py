@@ -30,7 +30,7 @@ class ProcessDetector :
         
         env = os.environ.copy()            # 复制当前环境变量，使opencv的DLL能够被找到
 
-        # 从配置中注入 OpenCV 的 bin 目录，避免硬编码
+        # 从配置中注入 OpenCV 的 bin 目录
         opencv_bin = None
         try:
             opencv_bin = (ctx.config or {}).get("dector", {}).get("process", {}).get("opencv_bin")

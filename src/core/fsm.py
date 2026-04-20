@@ -68,6 +68,7 @@ class FSMService(threading.Thread) :
                 ((ctx.config or {}).get("dector", {}).get("conf_threshold", 0.5))
             )
         )
+        self.return_to_base: bool = bool(cfg.get("return_to_base", True))
         self.fire_founded: bool = False
 
         log_event(
@@ -80,8 +81,10 @@ class FSMService(threading.Thread) :
                 "patrol_stale_s": round(self.patrol_stale_s, 2),
                 "cmd_dedup_s": round(self.cmd_dedup_s, 2),
                 "stop_cmd": self.stop_cmd,
-                "violation_cmd": self.violation_cmd,
+                "violation_cmd": self.violation_cmd,         # 意思是
+                "return_to_base": self.return_to_base,
             },
+            level=logging.ERROR,
             brief=False,
         )    
     
@@ -251,11 +254,13 @@ class FSMService(threading.Thread) :
                     self.fire_founded = True
                     try:       # 触发火警后，直接返回基地
                         if hasattr(ctx, "set_mission"):
-                            ctx.set_mission(
-                                mode="FIRE_RETURN",
-                                return_to_base=True,
-                                fire_found_ts=_now_ts(),
-                            )
+                            mission_kwargs = {
+                                "mode": "FIRE_RETURN",
+                                "fire_found_ts": _now_ts(),
+                            }
+                            if self.return_to_base:
+                                mission_kwargs["return_to_base"] = True
+                            ctx.set_mission(**mission_kwargs)
                     except Exception:
                         pass
 

@@ -1,6 +1,8 @@
 PyYAML
 pyserial
 onnxruntime
-numpy < 2 
+# 需要与系统 picamera2/simplejpeg 二进制扩展保持 ABI 兼容
+numpy==1.24.2
+# 如果需要开启 pi_video_open 则需要安装 opencv-python
 opencv-python-headless
 requests

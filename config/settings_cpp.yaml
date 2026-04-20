@@ -11,6 +11,12 @@ dector:
   conf_threshold: 0.60
   target_classes: [0, 1, 2]
   show_window: true
+  pi_video_open: false
+  object_log:
+    enable: true
+    every_detection: true       # true=每次检测都打日志；false=按 log_dedup 去重
+    level: "INFO"
+    brief: true                 # true 时会进入 logs_be（简版日志）
   process:
     exec_path: detector_cpp/build/Release/detector_ncnn.exe  # 原值: detector_cpp/build/Release/detector_ncnn.exe 
     args:

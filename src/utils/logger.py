@@ -124,6 +124,10 @@ def configure_logging(*, is_pi: bool = False, enable_cn: Optional[bool] = None, 
     stdout_handler = _build_stream_handler(logging.INFO, brief_only=True)
     lg.addHandler(stdout_handler)
 
+    # 记录日志的名字
+    log_event(lg, source="INIT", event="log_de_created", key={"path": paths["detailed"]}, level=logging.INFO, brief=True, message=f"Detailed log file created: {paths['detailed']}")
+    log_event(lg, source="INIT", event="log_be_created", key={"path": paths["brief"]}, level=logging.INFO, brief=True, message=f"Brief log file created: {paths['brief']}")
+
     log_event(lg, source="INIT", event="logging_configured", key={"is_pi": is_pi, "enable_cn": enable_cn, "stage": stage}, level=logging.DEBUG, brief=False)
     return lg
 

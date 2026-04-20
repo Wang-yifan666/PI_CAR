@@ -204,8 +204,9 @@ int main( int argc , char** argv )
         const int img_w = frame.cols ;
         const int img_h = frame.rows ;
 
+        // OpenCV reads BGR; convert to RGB to match the Python ONNX preprocessing path.
         ncnn::Mat in = ncnn::Mat::from_pixels_resize(
-            frame.data, ncnn::Mat::PIXEL_BGR, img_w, img_h, imgsz, imgsz ) ;
+            frame.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, imgsz, imgsz ) ;
 
         // 归一化到 [0,1]
         const float norm_vals[3] = {1/255.f, 1/255.f, 1/255.f};
@@ -271,11 +272,19 @@ int main( int argc , char** argv )
 
             float obj = p[4] ; 
 
+            // Some converted models may emit NaN/Inf on tail rows; drop invalid rows early.
+            if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(bw) || !std::isfinite(bh) || !std::isfinite(obj))
+                continue;
+
             int cid = 0 ;
             float cls_best = p[5] ;
+            if (!std::isfinite(cls_best))
+                continue;
             for ( int k = 1; k < (out.w - 5) ; ++ k ) 
             {
                 float s = p[5 + k] ;
+                if (!std::isfinite(s))
+                    continue;
                 if (s > cls_best)
                 {
                     cls_best = s ;
@@ -285,7 +294,7 @@ int main( int argc , char** argv )
 
             float score = obj * cls_best ;
 
-            if ( score < conf_thres )
+            if (!std::isfinite(score) || score < conf_thres)
                 continue;
 
             if ( debug ) 
