@@ -26,7 +26,7 @@ dector :
   conf_threshold : 0.60 # 置信度阈值
   target_classes : [0 , 1 , 2]   # 需要检测的类别
 
-  show_window : false  # 原值: true；
+  show_window : true  # 原值: true
   pi_video_open: true  # Pi 摄像头画面通过 SSH 传输到电脑上，供调试用
   window_mode: "autosize"   # autosize 更稳，避免 X11 全屏/缩放导致的崩溃
 

@@ -12,7 +12,7 @@ from src.services.dector_parts.display import (
     ensure_qt_compat_env,
     probe_display_reachable,
     disable_display_flag,
-    safe_named_window,)
+    safe_named_window)
 
 # 在导入 cv2 前先注入 Qt 兼容环境
 ensure_qt_compat_env()

@@ -1,4 +1,4 @@
-from .rules import DetectorRulesMixin
-from .status import DetectorStatusMixin
+from .rules import DetectorRules
+from .status import DetectorStatus
 
-__all__ = ["DetectorRulesMixin", "DetectorStatusMixin"]
+__all__ = ["DetectorRules", "DetectorStatus"]
